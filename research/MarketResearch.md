@@ -4,16 +4,21 @@
 
 ## Part 1 — Landscape Survey (summary; full profiles in CompanyDatabase.md)
 
-*[Populated from parallel primary-source research across 5 batches — classic venture studios, AI-native studios/accelerators, holding-company/compounder models, Europe & newest AI-native studios, and Japan-specific studios. Full company-by-company detail with citations is in `CompanyDatabase.md`; this section synthesizes the landscape shape.]*
+Full primary-source profiles of 45 organizations (5 categories × 9 each) are in `CompanyDatabase.md`, researched via company sites, founder interviews, investor materials, official blogs, and (secondarily) reputable tech/financial media — see `References.md` for the consolidated source list. This section summarizes the landscape shape; the evidentiary cross-analysis is in `CompetitiveAnalysis.md`.
 
-**STATUS NOTE (to be replaced once research agents complete):** This section will summarize ~45 organizations across 5 categories:
-- Classic venture studios / company builders (Idealab, Betaworks, Atomic, Pioneer Square Labs, Rocket Internet, eFounders/Hexa, Science Inc., Expa, Human Ventures)
-- AI-native studios, talent funds, and accelerators (Antler, Entrepreneur First, South Park Commons, HF0, AI Grant, OpenAI Startup Fund, Y Combinator, Techstars, 500 Global)
-- Compounder holding companies / conglomerates studied as a capital-allocation model (Constellation Software, Danaher, Roper Technologies, Berkshire Hathaway, Thermo Fisher, Permanent Equity, Tiny, Alphabet's X/Other Bets, Prosus/Naspers)
-- Europe & newest AI-native company builders (Founders Factory, a16z Speedrun, Neo, High Alpha, and additional 2023-2025 AI-native studios identified during research)
-- Japan-specific studios and holding companies (DeNA, CyberAgent, Sun* Inc, XTech, Relic, Quantum, Coral Capital, BEENEXT, Skyland/Delight Ventures, plus Japan market context)
+**The five categories researched, and why each matters to this design:**
 
-*(This placeholder will be replaced with the full synthesized findings once the underlying research batches are compiled into `CompanyDatabase.md`, and this note removed.)*
+1. **Classic Venture Studios / Company Builders** (Idealab, Betaworks, Atomic, Pioneer Square Labs, Rocket Internet, eFounders/Hexa, Science Inc., Expa, Human Ventures) — the pre-AI-era template this brief's AI org (`AIOrganization.md`) is built to compress and accelerate. The multi-decade survivors here (Idealab, Betaworks) share a "retain minority equity, let outside capital scale it" discipline distinct from the more volatile, balance-sheet-heavy builders (Rocket Internet, and to a lesser extent Atomic).
+2. **AI-Native Studios, Talent Funds & Accelerators** (Antler, Entrepreneur First, South Park Commons, HF0, AI Grant, OpenAI Startup Fund, Y Combinator, Techstars, 500 Global) — the current best-funded, most talent-dense competitive set. Funding instruments have converged almost completely (see `CompetitiveAnalysis.md` §6); the live competitive axis has shifted to compute/GPU access, not cash.
+3. **Compounder Holding Companies** (Constellation Software, Danaher, Roper Technologies, Berkshire Hathaway, Thermo Fisher, Permanent Equity, Tiny, Alphabet's X/Other Bets, Prosus/Naspers) — studied not as startup studios but as the permanent-capital, decentralized-capital-allocation model this brief's redesign (`StartupStudioPlaybook.md` Part 10) proposes grafting onto a studio's origination engine. Constellation Software and Berkshire are the dataset's clearest longevity benchmarks (~35%/yr and ~20%/yr multi-decade returns respectively).
+4. **Europe & Newest AI-Native Studios** (Founders Factory, a16z Speedrun, Neo, Alloy Partners, High Alpha, Blackbird Ventures, Forum Ventures AI Venture Studio, Thinkhat, AI Fund) — the newest crop, several launched 2023-2025 specifically around agentic AI. Alloy Partners (1,133 named operational agents) and Founders Factory (named, audited before/after AI-adoption metrics) are the two organizations in the entire 45-company dataset with the most credible, falsifiable internal-AI-usage disclosure — a high bar this brief holds its own AI-usage claims to (`CompetitiveAnalysis.md` §4).
+5. **Japan Studios & Market Context** (DeNA, CyberAgent, Sun* Inc., XTech, Relic, quantum Inc., Coral Capital, BEENEXT, Skyland Ventures, plus dedicated Japan market-context research) — directly informs the Japan-first strategy in `StartupStudioPlaybook.md` Part 7. Key finding: **Japan has no dedicated, from-scratch AI-native venture studio as of mid-2026** — every Japan AI vehicle found is a 2025-vintage AI bolt-on to a pre-existing generalist studio/CVC (Relic's "AI Rich Studio" JV, DeNA's DVB3 fund) — a genuine, currently-open market gap rather than a crowded category, against a backdrop of rising corporate CVC appetite (+¥32bn YoY in 2025 even as pure VC funding fell ~8%) and government compute subsidies (GENIAC).
+
+**Landscape-level observations that recur across all five categories** (fully evidenced in `CompetitiveAnalysis.md`):
+- Real, calculable success/failure rates are disclosed by fewer than 10 of the 45 organizations — nearly everyone else reports only flattering numerator metrics (§1 of `CompetitiveAnalysis.md`).
+- "AI-native" as a brand claim is now nearly costless to assert and carries little signal on its own; only a handful of organizations back it with named tools and audited before/after metrics (§4 of `CompetitiveAnalysis.md`).
+- Funding instruments across the AI-native cohort have standardized on SAFE-plus-cash-for-single-digit-equity; the real competitive differentiation has moved to compute/GPU access (§6 of `CompetitiveAnalysis.md`).
+- Founder backgrounds cluster into three repeatable archetypes — repeat operator, ex-consultant talent-investor, and frontier-AI insider (§5 of `CompetitiveAnalysis.md`) — useful for benchmarking this studio's own founding-team positioning.
 
 ---
 
