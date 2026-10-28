@@ -1,0 +1,9 @@
+node_modules/
+dist/
+# 実行データ（DB・案件ごとの作業ディレクトリ）はリポジトリに含めない
+data/
+test-data/
+e2e-artifacts/
+*.log
+.env
+.env.*
