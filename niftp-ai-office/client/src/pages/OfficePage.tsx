@@ -7,6 +7,7 @@ import { EMPLOYEE_STATUS, JOB_STATUS } from '../labels.ts';
 import { appearanceOf } from '../office/appearance.ts';
 import { Portrait } from '../office/Character.tsx';
 import type { Target } from '../office/layout.ts';
+import { iso, VIEW } from '../office/iso.ts';
 import { OfficeScene } from '../office/OfficeScene.tsx';
 import { AchievementsPanel, CeoPanel, EmployeePanel, EntrancePanel, EventsPanel, ShelfPanel, type PanelKind } from '../office/Panels.tsx';
 import { useNow, useOfficeEvents, useReducedMotion, useSeenDeliverables } from '../office/state.ts';
@@ -29,16 +30,18 @@ export function OfficePage({ snapshot, navigate }: Props) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    // スマートフォンでは縮小せず、執務スペースが見える位置から表示する
+    // スマートフォンでは縮小せず、ロゴの壁と共同デスクが中央に来る位置から表示する
     const el = scrollRef.current;
-    if (el && el.scrollWidth > el.clientWidth) el.scrollLeft = (el.scrollWidth - el.clientWidth) * 0.45;
+    if (!el || el.scrollWidth <= el.clientWidth) return;
+    const [focusX] = iso(6.2, 3.0, 0);
+    el.scrollLeft = (focusX / VIEW.w) * el.scrollWidth - el.clientWidth / 2;
   }, [view]);
 
   const pending = snapshot.approvals.filter((a) => a.status === 'pending');
   const running = snapshot.jobs.filter((j) => j.status === 'running');
   const waiting = snapshot.jobs.filter((j) => j.status === 'queued' || j.status === 'paused');
   const completedCount = snapshot.jobs.filter((j) => j.status === 'completed').length;
-  const demoMode = snapshot.settings.defaultAdapter === 'demo' || snapshot.jobs.some((j) => j.adapter === 'demo' && ['running', 'queued', 'awaiting_review'].includes(j.status));
+  const errors = snapshot.jobs.filter((j) => j.status === 'error');
   const selectedEmployee = panel && typeof panel === 'object' ? snapshot.employees.find((e) => e.id === panel.employee) : undefined;
   const lastEvent = events[events.length - 1];
   const nameOf = (id: string | null) => (id ? (snapshot.employees.find((e) => e.id === id)?.name ?? '') : 'CEO');
@@ -91,24 +94,24 @@ export function OfficePage({ snapshot, navigate }: Props) {
 
   return (
     <div className="hq">
-      <div className="hq-hud" role="region" aria-label="会社の状況">
-        <details className={`mode-chip ${demoMode ? 'is-demo' : 'is-real'}`}>
-          <summary>{demoMode ? 'デモモード' : '実接続モード'}</summary>
-          <div className="mode-detail">
-            {demoMode
-              ? 'デモ実行の案件は、定型の手順と定型テキストで流れを確認するためのものです。実際のAIによる調査・制作ではありません。成果物には「デモ」と表示されます。'
-              : '新しい依頼は Claude Code が実際に作業します。費用・利用枠を消費します。'}{' '}
-            <a href="#/settings">実行方式の設定</a>
-          </div>
-        </details>
-        <button type="button" className="hud-stat" onClick={() => navigate('board')} data-testid="hud-working">
-          <span className="hud-num tone-text-working">{running.length}</span>
-          <span>作業中</span>
-          {waiting.length > 0 && <span className="muted small">（待ち {waiting.length}）</span>}
-        </button>
+      <div className={`hq-hud ${running.length ? 'has-running' : ''}`} role="region" aria-label="会社の状況">
+        {/* 承認待ち・エラーを先頭に置き、装飾より先に目に入るようにする */}
         <button type="button" className={`hud-stat ${pending.length ? 'attention' : ''}`} onClick={() => setPanel('ceo')} data-testid="hud-pending">
-          <span className="hud-num tone-text-review">{pending.length}</span>
+          {pending.length > 0 && <span className="hud-icon">!</span>}
+          <span className="hud-num">{pending.length}</span>
           <span>承認待ち</span>
+        </button>
+        {errors.length > 0 && (
+          <button type="button" className="hud-stat error" onClick={() => navigate('board')} data-testid="hud-errors">
+            <span className="hud-num">{errors.length}</span>
+            <span>エラー</span>
+          </button>
+        )}
+        <button type="button" className="hud-stat" onClick={() => navigate('board')} data-testid="hud-working">
+          <span className="st-dot" aria-hidden />
+          <span className="hud-num">{running.length}</span>
+          <span>作業中</span>
+          {waiting.length > 0 && <span className="muted small hud-label-long">（待ち {waiting.length}）</span>}
         </button>
         {running.map((j) => (
           <div key={j.id} className="hud-running">
@@ -121,13 +124,24 @@ export function OfficePage({ snapshot, navigate }: Props) {
           </div>
         ))}
         <div className="hud-right">
-          <button type="button" className="btn small ghost" onClick={() => setPanel('events')} title={lastEvent ? `${nameOf(lastEvent.employeeId)}：${lastEvent.label}` : ''}>
+          <button type="button" className="btn small ghost desktop-only" onClick={() => setPanel('events')} title={lastEvent ? `${nameOf(lastEvent.employeeId)}：${lastEvent.label}` : ''}>
             出来事
           </button>
-          <button type="button" className="btn small ghost" aria-pressed={reduced} onClick={() => setPref(reduced ? 'off' : 'on')}>
+          <button type="button" className="btn small ghost desktop-only" aria-pressed={reduced} onClick={() => setPref(reduced ? 'off' : 'on')}>
             {reduced ? '動きを戻す' : '動きを減らす'}
           </button>
-          <button type="button" className="btn small primary" onClick={() => navigate('request')}>
+          <details className="popover hud-more mobile-only">
+            <summary aria-label="その他の操作">…</summary>
+            <div className="popover-body align-right">
+              <button type="button" className="btn small" onClick={() => setPanel('events')}>
+                最近の出来事
+              </button>
+              <button type="button" className="btn small" aria-pressed={reduced} onClick={() => setPref(reduced ? 'off' : 'on')}>
+                {reduced ? '動きを戻す' : '動きを減らす'}
+              </button>
+            </div>
+          </details>
+          <button type="button" className="btn primary" onClick={() => navigate('request')}>
             仕事を依頼
           </button>
         </div>
@@ -170,7 +184,7 @@ export function OfficePage({ snapshot, navigate }: Props) {
             const st = EMPLOYEE_STATUS[e.status];
             return (
               <button key={e.id} type="button" className="person-card" onClick={() => setPanel({ employee: e.id })}>
-                <Portrait look={appearanceOf(e.id)} outfitColor={e.color} size={52} />
+                <Portrait look={appearanceOf(e.id)} size={52} />
                 <span className="person-main">
                   <span className="strong">{e.name}</span> <span className="muted small">{e.roleTitle}</span>
                   <span className="small">

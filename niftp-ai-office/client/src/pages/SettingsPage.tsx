@@ -45,7 +45,7 @@ function EmployeeEditor({ e }: { e: EmployeeView }) {
             <input value={form.roleTitle} maxLength={40} onChange={(x) => setForm({ ...form, roleTitle: x.target.value })} />
           </label>
           <label className="color">
-            色
+            差し色（小物）
             <input type="color" value={form.color} onChange={(x) => setForm({ ...form, color: x.target.value })} />
           </label>
         </div>

@@ -1,7 +1,7 @@
 // オフィスで社員や家具を選んだときに開く詳細パネル。内容はすべて実際の記録から作る。
 import type { ReactNode } from 'react';
 import type { DeliverableView, EmployeeView, OfficeEvent, Snapshot } from '../api.ts';
-import { Badge, DemoBadge } from '../components.tsx';
+import { Badge, CompanyInfo, DemoBadge } from '../components.tsx';
 import { EMPLOYEE_STATUS, formatTime } from '../labels.ts';
 import { appearanceOf } from './appearance.ts';
 import { Portrait } from './Character.tsx';
@@ -41,7 +41,7 @@ export function EmployeePanel({
       onClose={onClose}
       title={
         <span className="emp-title">
-          <Portrait look={appearanceOf(e.id)} outfitColor={e.color} size={64} />
+          <Portrait look={appearanceOf(e.id)} size={64} />
           <span>
             <span className="emp-name">{e.name}</span>
             <span className="emp-role">{e.roleTitle}</span>
@@ -126,14 +126,14 @@ export function CeoPanel({ snapshot, onClose }: { snapshot: Snapshot; onClose: (
   const pending = snapshot.approvals.filter((a) => a.status === 'pending');
   const nameOf = (id: string) => snapshot.employees.find((e) => e.id === id)?.name ?? id;
   return (
-    <PanelShell title="CEOのデスク" onClose={onClose} testId="ceo-panel">
-      <p className="muted small">AI社員から届いた、CEOの判断が必要な事項です。</p>
+    <PanelShell title="CEO 植村和也" onClose={onClose} testId="ceo-panel">
+      <p className="muted small">チームと同じ共同デスクで働いています。AI社員から届いた、CEOの判断が必要な事項です。</p>
       {pending.length === 0 ? (
         <p>判断待ちはありません。</p>
       ) : (
         <ul className="decision-list">
           {pending.map((a) => (
-            <li key={a.id}>
+            <li key={a.id} className="attention">
               <div className="strong">{a.title}</div>
               <div className="muted small">
                 依頼者 {nameOf(a.requestedBy)}・確認事項 {a.items.length}件・{formatTime(a.createdAt)}
@@ -268,15 +268,10 @@ export function EventsPanel({ events, snapshot, onClose }: { events: OfficeEvent
 
 export function EntrancePanel({ snapshot, onClose }: { snapshot: Snapshot; onClose: () => void }) {
   return (
-    <PanelShell title="NIFTP 本社" onClose={onClose} testId="entrance-panel">
-      <p>
-        <strong>{snapshot.company.name}</strong>
-        <br />
-        <span className="muted small">{snapshot.company.note}</span>
-      </p>
-      <p>CEO: {snapshot.company.ceo}</p>
-      <p>AI社員: {snapshot.employees.length}名</p>
-      <p className="muted small">社員の名前は仮の名前です。設定画面で変更できます。</p>
+    <PanelShell title="会社情報" onClose={onClose} testId="entrance-panel">
+      <img className="panel-logo" src="/brand/niftp-logo.png" alt="NIFTP" width={1087} height={381} />
+      <CompanyInfo snapshot={snapshot} />
+      <p className="muted small">社員の名前・作業指示は設定画面で変更できます。</p>
       <a className="btn" href="#/settings">
         設定を開く
       </a>

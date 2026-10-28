@@ -1,74 +1,76 @@
-// AI社員の見た目。社員ごとに髪型・服装・小物・デスク周りを変えて見分けられるようにする。
+// AI社員とCEOの見た目。服装はスマートカジュアルで、色は会社の配色（インク・オフホワイト・グレー・オート）になじませ、
+// 髪型・服の形・小物で見分けられるようにする。設定画面の「色」は机のマグカップなどの小さな差し色にだけ使う。
 // 将来、見た目の変更機能を追加するときは、この定義をサーバー保存に置き換えればよい（描画側は Appearance だけを見る）。
-// 服の色は設定画面の「色」を使うため、色を変えると見た目にも反映される。
 
 export type HairStyle = 'short' | 'bob' | 'long' | 'bun' | 'curly' | 'side';
-export type Outfit = 'hoodie' | 'shirt-tie' | 'cardigan' | 'jacket';
-export type Accessory = 'glasses' | 'headphones' | 'earring' | 'scarf' | 'none';
-export type DeskProp = 'mug' | 'plant' | 'books' | 'notes' | 'second-monitor' | 'magnifier' | 'figure' | 'lamp';
+export type Outfit = 'tee' | 'shirt' | 'hoodie' | 'knit' | 'overshirt';
+export type Accessory = 'glasses' | 'headphones' | 'earring' | 'watch' | 'none';
+export type DeskProp = 'mug' | 'plant' | 'books' | 'notes' | 'tablet' | 'headphones' | 'bottle';
 
 export interface Appearance {
   skin: string;
   hairStyle: HairStyle;
   hairColor: string;
   outfit: Outfit;
-  /** 服の差し色（シャツ・ネクタイ・インナーなど）。 */
-  accent: string;
+  /** 服の色（会社の配色になじむ落ち着いた色）。 */
+  outfitColor: string;
+  /** インナー・襟・ひもなどの色。 */
+  inner: string;
   accessory: Accessory;
+  /** 共同デスクの自分の場所に置いている物。 */
   deskProps: DeskProp[];
-  /** デスクの天板の色。 */
-  deskTop: string;
 }
 
-const PRESETS: Record<string, Omit<Appearance, never>> = {
+const PRESETS: Record<string, Appearance> = {
   manager: {
-    skin: '#f1cfae',
+    skin: '#efcfb0',
     hairStyle: 'side',
-    hairColor: '#2c2420',
-    outfit: 'shirt-tie',
-    accent: '#e9eef5',
+    hairColor: '#24211d',
+    outfit: 'shirt',
+    outfitColor: '#c9d0cf',
+    inner: '#f2f0e7',
     accessory: 'glasses',
-    deskProps: ['notes', 'mug', 'lamp'],
-    deskTop: '#c9a77c',
+    deskProps: ['notes', 'mug'],
   },
   researcher: {
-    skin: '#f4d6bb',
+    skin: '#f3d6bc',
     hairStyle: 'bob',
-    hairColor: '#6b3f26',
-    outfit: 'cardigan',
-    accent: '#f5efe2',
+    hairColor: '#5e3c27',
+    outfit: 'knit',
+    outfitColor: '#d8cfb8',
+    inner: '#f2f0e7',
     accessory: 'earring',
-    deskProps: ['books', 'magnifier', 'plant'],
-    deskTop: '#d1b089',
+    deskProps: ['books', 'plant'],
   },
   builder: {
-    skin: '#e3b48f',
+    skin: '#ddb08b',
     hairStyle: 'curly',
-    hairColor: '#1f1b1a',
+    hairColor: '#1c1a18',
     outfit: 'hoodie',
-    accent: '#2b3a55',
+    outfitColor: '#3a3d36',
+    inner: '#a4a89d',
     accessory: 'headphones',
-    deskProps: ['second-monitor', 'figure', 'mug'],
-    deskTop: '#bf9a6c',
+    deskProps: ['tablet', 'bottle'],
   },
   qa: {
-    skin: '#f6dcc5',
+    skin: '#f5dcc6',
     hairStyle: 'bun',
-    hairColor: '#8a5a3c',
-    outfit: 'jacket',
-    accent: '#fbf6ee',
-    accessory: 'scarf',
-    deskProps: ['notes', 'plant', 'mug'],
-    deskTop: '#cbac84',
+    hairColor: '#7b4f33',
+    outfit: 'tee',
+    outfitColor: '#8e9585',
+    inner: '#f2f0e7',
+    accessory: 'watch',
+    deskProps: ['notes', 'mug'],
   },
 };
 
 const HAIR: HairStyle[] = ['short', 'bob', 'long', 'bun', 'curly', 'side'];
-const OUTFITS: Outfit[] = ['hoodie', 'shirt-tie', 'cardigan', 'jacket'];
-const ACCESSORIES: Accessory[] = ['glasses', 'headphones', 'earring', 'scarf', 'none'];
-const HAIR_COLORS = ['#2c2420', '#6b3f26', '#1f1b1a', '#8a5a3c', '#4a3a2c'];
-const SKINS = ['#f1cfae', '#f4d6bb', '#e3b48f', '#f6dcc5', '#d9a77c'];
-const PROPS: DeskProp[][] = [['mug', 'plant'], ['books', 'notes'], ['second-monitor', 'mug'], ['lamp', 'books']];
+const OUTFITS: Outfit[] = ['tee', 'shirt', 'hoodie', 'knit', 'overshirt'];
+const OUTFIT_COLORS = ['#3a3d36', '#d8cfb8', '#8e9585', '#c9d0cf', '#5b5f56', '#e9e6da'];
+const ACCESSORIES: Accessory[] = ['glasses', 'headphones', 'earring', 'watch', 'none'];
+const HAIR_COLORS = ['#24211d', '#5e3c27', '#1c1a18', '#7b4f33', '#3d332b'];
+const SKINS = ['#efcfb0', '#f3d6bc', '#ddb08b', '#f5dcc6', '#d5a37e'];
+const PROPS: DeskProp[][] = [['mug', 'plant'], ['books', 'notes'], ['tablet', 'mug'], ['bottle', 'books']];
 
 function hash(s: string): number {
   let h = 0;
@@ -86,20 +88,21 @@ export function appearanceOf(employeeId: string): Appearance {
     hairStyle: HAIR[h % HAIR.length],
     hairColor: HAIR_COLORS[(h >> 3) % HAIR_COLORS.length],
     outfit: OUTFITS[(h >> 5) % OUTFITS.length],
-    accent: '#f5efe2',
+    outfitColor: OUTFIT_COLORS[(h >> 6) % OUTFIT_COLORS.length],
+    inner: '#f2f0e7',
     accessory: ACCESSORIES[(h >> 7) % ACCESSORIES.length],
     deskProps: PROPS[(h >> 9) % PROPS.length],
-    deskTop: '#c9a77c',
   };
 }
 
+/** CEO もスーツではなく、チームと同じスマートカジュアル。 */
 export const CEO_APPEARANCE: Appearance = {
-  skin: '#efcaa6',
+  skin: '#ebc7a3',
   hairStyle: 'short',
-  hairColor: '#1d1a19',
-  outfit: 'jacket',
-  accent: '#ffffff',
+  hairColor: '#1b1a18',
+  outfit: 'overshirt',
+  outfitColor: '#26281f',
+  inner: '#f2f0e7',
   accessory: 'none',
-  deskProps: ['mug'],
-  deskTop: '#7a5532',
+  deskProps: ['mug', 'notes'],
 };

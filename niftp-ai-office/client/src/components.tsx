@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
-import { api, type DeliverableContent, type JobSummary } from './api.ts';
+import { api, type DeliverableContent, type JobSummary, type Snapshot } from './api.ts';
 import { ACTION_LABEL, formatBytes, formatTime } from './labels.ts';
 
 export function Badge({ tone, children, title }: { tone: string; children: ReactNode; title?: string }) {
@@ -115,4 +115,20 @@ export function DeliverableViewer({ id }: { id: number }) {
 
 export function Empty({ children }: { children: ReactNode }) {
   return <div className="empty">{children}</div>;
+}
+
+/** 会社情報。法人は未設立で、社名は構想上の名称であることを必ず併記する。 */
+export function CompanyInfo({ snapshot }: { snapshot: Snapshot }) {
+  return (
+    <div className="company-info">
+      <p className="company-name">{snapshot.company.name}</p>
+      <p className="concept-note">{snapshot.company.note}</p>
+      <dl>
+        <dt>CEO</dt>
+        <dd>{snapshot.company.ceo}</dd>
+        <dt>AI社員</dt>
+        <dd>{snapshot.employees.length}名（名前は仮の名前です）</dd>
+      </dl>
+    </div>
+  );
 }

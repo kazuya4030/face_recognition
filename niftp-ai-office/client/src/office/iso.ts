@@ -56,15 +56,15 @@ export function depthOf({ x, y, w, d }: Pick<BoxGeom, 'x' | 'y' | 'w' | 'd'>): n
 
 /**
  * 壁面に文字や絵を貼るための変換。ローカル座標の1pxが壁に沿って水平に進み、縦はそのまま下へ。
- * 'back-right' は y=0 の壁（画面右上）、'back-left' は x=0 の壁（画面左上）。
+ * 'back-right' は y=0 の壁（画面右上）、'back-left' は x=0 の壁（画面左上）。offset は壁から手前への距離。
  */
-export function wallTransform(wall: 'back-right' | 'back-left', u: number, z: number): string {
+export function wallTransform(wall: 'back-right' | 'back-left', u: number, z: number, offset = 0): string {
   if (wall === 'back-right') {
-    const [ex, ey] = iso(u, 0, z);
+    const [ex, ey] = iso(u, offset, z);
     return `matrix(1 0.5 0 1 ${ex.toFixed(1)} ${ey.toFixed(1)})`;
   }
   // 左の壁は手前（y が大きい側）から奥へ読むと左から右になる
-  const [ex, ey] = iso(0, u, z);
+  const [ex, ey] = iso(offset, u, z);
   return `matrix(1 -0.5 0 1 ${ex.toFixed(1)} ${ey.toFixed(1)})`;
 }
 

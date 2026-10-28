@@ -88,12 +88,19 @@ try {
     for (const id of ['manager', 'researcher', 'builder', 'qa']) await person(page, id).waitFor();
     for (const n of ['ハル', 'ミナ', 'ソラ', 'リツ', 'CEO 植村']) await page.locator('.name-tag', { hasText: n }).waitFor();
     await page.locator('.mode-chip', { hasText: 'デモモード' }).waitFor();
-    await page.getByText('構想上の名称（法人未設立）').waitFor();
+    await page.locator('.brand-logo').waitFor();
+    await page.locator('[data-testid="brand-logo"]').waitFor({ state: 'attached' });
+    // 法人設立状況は会社情報に整理（設立済みと誤認させない表示を維持）
+    await page.locator('.company-pop summary').click();
+    await page.locator('.company-pop').getByText('構想上の名称（法人未設立）').waitFor();
+    await page.locator('.company-pop summary').click();
     if ((await page.locator('.character.is-working').count()) !== 0) throw new Error('待機中なのに作業中の演出が表示されている');
     await page.screenshot({ path: path.join(shots, '01-office-idle.png') });
     // 家具のクリックが実際の機能につながる
     await page.locator('[data-testid="entrance"]').click();
     await page.locator('[data-testid="entrance-panel"]').getByText('構想上の名称（法人未設立）').waitFor();
+    await page.screenshot({ path: path.join(shots, '01b-company-panel.png') });
+    await page.locator('[data-testid="entrance-panel"]').getByRole('button', { name: '閉じる' }).click();
     await page.locator('[data-testid="whiteboard"]').click();
     await page.waitForURL(/#\/board/);
     await page.goto(base);
@@ -249,6 +256,16 @@ try {
     await person(page, 'qa').waitFor();
     const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
     if (overflow > 1) throw new Error(`ページが横にはみ出しています（${overflow}px）`);
+    // 初期表示でロゴ・オフィスの主要部分・仕事を依頼する操作が見える
+    for (const sel of ['.brand-logo', '.hq-hud .btn.primary']) {
+      const box = await page.locator(sel).boundingBox();
+      if (!box || box.y + box.height > 844) throw new Error(`${sel} が初期表示に入っていません`);
+    }
+    const sceneBox = await page.locator('.hq-scene-scroll').boundingBox();
+    if (!sceneBox || sceneBox.y > 200) throw new Error('オフィスが画面下に押し出されています');
+    await page.getByRole('button', { name: 'メニュー' }).click();
+    await page.locator('.menu-sheet').getByText('構想上の名称（法人未設立）').waitFor();
+    await page.getByRole('button', { name: 'メニュー' }).click();
     const sceneWidth = await page.locator('.iso-scene').evaluate((el) => el.getBoundingClientRect().width);
     if (sceneWidth < 800) throw new Error(`オフィスが縮小されすぎています（${sceneWidth}px）`);
     await page.screenshot({ path: path.join(shots, '11-mobile.png') });
