@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api, type EmployeeView, type Snapshot } from '../api.ts';
 import { Badge } from '../components.tsx';
+import { useReducedMotion } from '../office/state.ts';
 
 const TOOLS: { id: string; label: string }[] = [
   { id: 'Read', label: 'ファイルを読む' },
@@ -36,7 +37,7 @@ function EmployeeEditor({ e }: { e: EmployeeView }) {
       <div className="form">
         <div className="row">
           <label>
-            名前
+            名前（仮の名前です）
             <input value={form.name} maxLength={40} onChange={(x) => setForm({ ...form, name: x.target.value })} />
           </label>
           <label>
@@ -153,11 +154,37 @@ function ExecutionSettings({ snapshot }: { snapshot: Snapshot }) {
   );
 }
 
+function DisplaySettings() {
+  const { pref, setPref } = useReducedMotion();
+  return (
+    <section className="panel">
+      <h2>表示</h2>
+      <fieldset>
+        <legend>アニメーション（このブラウザだけの設定）</legend>
+        {(
+          [
+            ['system', 'OS の設定に従う'],
+            ['on', '動きを減らす（まばたき・書類の受け渡しなどを止める）'],
+            ['off', '動きを減らさない'],
+          ] as const
+        ).map(([v, label]) => (
+          <label key={v} className="check">
+            <input type="radio" name="motion" checked={pref === v} onChange={() => setPref(v)} />
+            {label}
+          </label>
+        ))}
+      </fieldset>
+      <p className="muted small">動きを減らしても、状態の表示・通知・出来事の一覧は同じように確認できます。</p>
+    </section>
+  );
+}
+
 export function SettingsPage({ snapshot }: { snapshot: Snapshot }) {
   return (
     <div className="page narrow">
       <h1>設定</h1>
       <ExecutionSettings snapshot={snapshot} />
+      <DisplaySettings />
       <h2>AI社員</h2>
       <p className="muted">名前・役割・作業指示・使えるツールを変更できます。変更は次の実行から反映されます。</p>
       {snapshot.employees.map((e) => (

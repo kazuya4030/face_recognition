@@ -222,3 +222,50 @@ describe('再起動', () => {
     expect(detail.runs.at(-1).status).toBe('interrupted');
   });
 });
+
+describe('オフィスの出来事（演出用イベント）', () => {
+  it('実行・引き継ぎ・成果物・承認の記録から導出する', async () => {
+    app = await makeApp(tempDataDir());
+    const id = (await api(app, 'POST', '/api/jobs', { ...JOB_INPUT, adapter: 'demo', startNow: true })).body.job.id;
+    await app.runner.waitForIdle();
+    const approvalId = app.repo.listApprovals(id)[0].id;
+    await api(app, 'POST', `/api/approvals/${approvalId}/decision`, { decision: 'approve', comment: '' });
+
+    const events = (await api(app, 'GET', '/api/office/events')).body as any[];
+    const types = events.map((e) => e.type);
+    expect(types.filter((t) => t === 'work_started')).toHaveLength(3);
+    const handoffs = events.filter((e) => e.type === 'handoff');
+    expect(handoffs.map((h) => [h.employeeId, h.toEmployeeId, h.label])).toEqual([
+      ['manager', 'researcher', '引き継ぎ'],
+      ['researcher', 'qa', 'レビュー依頼'],
+    ]);
+    expect(events.filter((e) => e.type === 'deliverable_saved').every((e) => e.deliverableId && e.toEmployeeId === 'shelf')).toBe(true);
+    expect(events.find((e) => e.type === 'approval_requested')).toMatchObject({ toEmployeeId: 'ceo', approvalId });
+    expect(events.at(-1)).toMatchObject({ type: 'approved', jobId: id });
+    // 同じ出来事は同じキーを返す（画面の既読管理に使う）
+    const again = (await api(app, 'GET', '/api/office/events')).body as any[];
+    expect(again.map((e) => e.key)).toEqual(events.map((e) => e.key));
+  });
+
+  it('エラーとキャンセルも出来事になる', async () => {
+    app = await makeApp(tempDataDir());
+    await api(app, 'POST', '/api/jobs', { ...JOB_INPUT, adapter: 'demo', demoScenario: 'error', usePlanner: false, startNow: true });
+    await app.runner.waitForIdle();
+    const events = (await api(app, 'GET', '/api/office/events')).body as any[];
+    expect(events.at(-1)).toMatchObject({ type: 'error', employeeId: 'researcher' });
+  });
+});
+
+describe('社員の仮の名前', () => {
+  it('初期名のまま変更されていない社員だけを新しい仮の名前にする', async () => {
+    const dataDir = tempDataDir();
+    app = await makeApp(dataDir);
+    // 以前の初期名を再現（researcher は利用者が編集済み）
+    app.repo.db.prepare(`UPDATE employees SET name = '業務責任者AI', role_title = '業務責任者' WHERE id = 'manager'`).run();
+    app.repo.db.prepare(`UPDATE employees SET name = '調査・企画AI', updated_at = '2099-01-01T00:00:00.000Z' WHERE id = 'researcher'`).run();
+    await app.close();
+    app = await makeApp(dataDir);
+    expect(app.repo.getEmployee('manager')).toMatchObject({ name: 'ハル', roleTitle: '業務責任者AI' });
+    expect(app.repo.getEmployee('researcher')!.name).toBe('調査・企画AI');
+  });
+});

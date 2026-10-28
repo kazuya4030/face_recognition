@@ -53,12 +53,16 @@ export function App() {
         </nav>
       </header>
 
-      {(demoDefault || demoRunning) && (
-        <div className="mode-banner" role="status">
-          <strong>デモモード</strong>
-          デモ実行の案件は、定型の手順と定型テキストで流れを確認するためのものです。実際のAIによる調査・制作ではありません（成果物には「デモ」と表示されます）。
-          {snapshot.adapters.find((a) => a.id === 'claude')?.ok && <a href="#/settings">実接続（Claude Code）に切り替える</a>}
-        </div>
+      {(demoDefault || demoRunning) && page !== 'office' && (
+        <details className="mode-banner" role="status">
+          <summary>
+            <strong>デモモード</strong> 実際のAIによる作業ではありません（詳しく）
+          </summary>
+          <p>
+            デモ実行の案件は、定型の手順と定型テキストで流れを確認するためのものです。成果物には「デモ」と表示されます。
+            {snapshot.adapters.find((a) => a.id === 'claude')?.ok && <a href="#/settings"> 実接続（Claude Code）に切り替える</a>}
+          </p>
+        </details>
       )}
 
       <main className="main">

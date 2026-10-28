@@ -1,6 +1,6 @@
 // 永続化層。SQL はこのファイルに閉じ込め、業務処理側はドメイン型だけを扱う。
 import type { DatabaseSync } from 'node:sqlite';
-import { SEED_EMPLOYEES } from '../domain/seed.ts';
+import { LEGACY_DEFAULT_NAMES, SEED_EMPLOYEES } from '../domain/seed.ts';
 import {
   DEFAULT_SETTINGS,
   type Activity,
@@ -181,7 +181,10 @@ export class Repo {
 
   seedIfEmpty(): void {
     const count = num((this.db.prepare('SELECT COUNT(*) AS c FROM employees').get() as Row).c);
-    if (count > 0) return;
+    if (count > 0) {
+      this.renameUntouchedDefaults();
+      return;
+    }
     const t = now();
     const stmt = this.db.prepare(
       `INSERT INTO employees (id, sort_order, name, role_key, role_title, description, instructions, color, tools, created_at, updated_at)
@@ -189,6 +192,15 @@ export class Repo {
     );
     for (const e of SEED_EMPLOYEES) {
       stmt.run(e.id, e.sortOrder, e.name, e.roleKey, e.roleTitle, e.description, e.instructions, e.color, JSON.stringify(e.tools), t, t);
+    }
+  }
+
+  /** 初期名のまま変更されていない社員だけを、現在の仮の名前・役割表記へ更新する。 */
+  private renameUntouchedDefaults(): void {
+    const stmt = this.db.prepare('UPDATE employees SET name = ?, role_title = ? WHERE id = ? AND name = ? AND created_at = updated_at');
+    for (const e of SEED_EMPLOYEES) {
+      const legacy = LEGACY_DEFAULT_NAMES[e.id];
+      if (legacy) stmt.run(e.name, e.roleTitle, e.id, legacy);
     }
   }
 

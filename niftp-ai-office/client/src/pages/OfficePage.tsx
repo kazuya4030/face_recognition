@@ -1,257 +1,206 @@
-import { useState } from 'react';
-import type { EmployeeView, Snapshot } from '../api.ts';
-import { Badge, DemoBadge } from '../components.tsx';
-import { BOARD_COLUMNS, EMPLOYEE_STATUS } from '../labels.ts';
+// オフィス画面（NIFTP本社）。オフィスを主役にし、常時表示は稼働モード・件数・停止操作に絞る。
+// 詳細は社員や家具をクリックしたときに開くパネルへ。スマートフォンではオフィス／社員／案件を切り替える。
+import { useEffect, useRef, useState } from 'react';
+import type { Snapshot } from '../api.ts';
+import { Badge, DemoBadge, JobActions } from '../components.tsx';
+import { EMPLOYEE_STATUS, JOB_STATUS } from '../labels.ts';
+import { appearanceOf } from '../office/appearance.ts';
+import { Portrait } from '../office/Character.tsx';
+import type { Target } from '../office/layout.ts';
+import { OfficeScene } from '../office/OfficeScene.tsx';
+import { AchievementsPanel, CeoPanel, EmployeePanel, EntrancePanel, EventsPanel, ShelfPanel, type PanelKind } from '../office/Panels.tsx';
+import { useNow, useOfficeEvents, useReducedMotion, useSeenDeliverables } from '../office/state.ts';
+import { useDeliverablesState } from './ApprovalsPage.tsx';
 
 type Props = { snapshot: Snapshot; navigate: (p: string) => void };
-
-const STATUS_ICON: Record<EmployeeView['status'], string> = {
-  idle: '',
-  working: '',
-  waiting_review: '!',
-  done: '✓',
-  error: '×',
-};
-
-function Avatar({ color, ceo = false }: { color: string; ceo?: boolean }) {
-  return (
-    <svg className="avatar" viewBox="0 0 40 48" aria-hidden>
-      <ellipse cx="20" cy="45" rx="13" ry="3" fill="rgba(0,0,0,.15)" />
-      <path d="M6 44 C6 30 34 30 34 44 Z" fill={color} />
-      {ceo && <path d="M18 31 L20 40 L22 31 Z" fill="#7a2e2e" />}
-      <circle cx="20" cy="18" r="10" fill="#f2d3b3" />
-      <path d="M10 16 C10 6 30 6 30 16 C27 11 13 11 10 16 Z" fill={ceo ? '#2b2b2b' : '#4a3a2c'} />
-    </svg>
-  );
-}
-
-function Desk({ e, selected, onSelect }: { e: EmployeeView; selected: boolean; onSelect: () => void }) {
-  const st = EMPLOYEE_STATUS[e.status];
-  return (
-    <button
-      type="button"
-      className={`desk status-${e.status} ${selected ? 'selected' : ''}`}
-      onClick={onSelect}
-      aria-pressed={selected}
-      aria-label={`${e.name}（${st.label}）の詳細を見る`}
-    >
-      <div className="desk-person">
-        {STATUS_ICON[e.status] && <span className={`bubble tone-${st.tone}`}>{STATUS_ICON[e.status]}</span>}
-        <Avatar color={e.color} />
-      </div>
-      <div className="desk-table">
-        <div className={`monitor ${e.status === 'working' ? 'on' : ''}`}>
-          {e.status === 'working' && (
-            <>
-              <i />
-              <i />
-              <i />
-            </>
-          )}
-        </div>
-      </div>
-      <div className="nameplate">
-        <span className="name">{e.name}</span>
-        <Badge tone={st.tone}>{st.label}</Badge>
-      </div>
-      {e.currentJob && <div className="desk-job">#{e.currentJob.id} {e.currentJob.title}</div>}
-    </button>
-  );
-}
-
-function EmployeePanel({ e, navigate, onClose }: { e: EmployeeView; navigate: Props['navigate']; onClose: () => void }) {
-  const st = EMPLOYEE_STATUS[e.status];
-  return (
-    <aside className="panel employee-panel" aria-label={`${e.name}の詳細`}>
-      <div className="panel-head">
-        <span className="swatch" style={{ background: e.color }} />
-        <div>
-          <h2>{e.name}</h2>
-          <div className="muted">{e.roleTitle}</div>
-        </div>
-        <button type="button" className="btn ghost small" onClick={onClose}>
-          閉じる
-        </button>
-      </div>
-      <dl className="kv">
-        <dt>役割</dt>
-        <dd>{e.description}</dd>
-        <dt>状態</dt>
-        <dd>
-          <Badge tone={st.tone}>{st.label}</Badge> <span className="muted">{e.statusDetail}</span>
-        </dd>
-        <dt>現在の案件</dt>
-        <dd>
-          {e.currentJob ? (
-            <a href={`#/jobs/${e.currentJob.id}`}>
-              #{e.currentJob.id} {e.currentJob.title}（{e.currentJob.stage}）
-            </a>
-          ) : (
-            <span className="muted">なし</span>
-          )}
-        </dd>
-        <dt>順番待ち</dt>
-        <dd>
-          {e.queuedJobs.length === 0 ? (
-            <span className="muted">なし</span>
-          ) : (
-            <ul className="plain">
-              {e.queuedJobs.map((j) => (
-                <li key={j.id}>
-                  <a href={`#/jobs/${j.id}`}>
-                    #{j.id} {j.title}
-                  </a>
-                </li>
-              ))}
-            </ul>
-          )}
-        </dd>
-        <dt>相談事項</dt>
-        <dd>
-          {e.pendingApprovals.length === 0 ? (
-            <span className="muted">なし</span>
-          ) : (
-            <ul className="plain">
-              {e.pendingApprovals.map((a) => (
-                <li key={a.id}>
-                  <a href="#/approvals">{a.title}</a>（確認事項 {a.itemCount}件）
-                </li>
-              ))}
-            </ul>
-          )}
-        </dd>
-        <dt>成果物</dt>
-        <dd>
-          {e.recentDeliverables.length === 0 ? (
-            <span className="muted">まだありません</span>
-          ) : (
-            <ul className="plain">
-              {e.recentDeliverables.map((d) => (
-                <li key={d.id}>
-                  <a href={`#/library/${d.id}`}>{d.title}</a> {d.isDemo && <DemoBadge />} <span className="muted">#{d.jobId}</span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </dd>
-      </dl>
-      <div className="panel-foot">
-        <button type="button" className="btn primary" onClick={() => navigate(`request?assignee=${e.id}`)}>
-          この社員に仕事を依頼
-        </button>
-        <a className="btn" href="#/settings">
-          作業指示を編集
-        </a>
-      </div>
-    </aside>
-  );
-}
+type MobileView = 'office' | 'people' | 'jobs';
 
 export function OfficePage({ snapshot, navigate }: Props) {
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const selected = snapshot.employees.find((e) => e.id === selectedId) ?? null;
+  const [panel, setPanel] = useState<PanelKind | null>(null);
+  const [view, setView] = useState<MobileView>('office');
+  const { list: deliverables, loaded: deliverablesLoaded } = useDeliverablesState();
+  const { events, fresh, consume } = useOfficeEvents();
+  const { reduced, setPref } = useReducedMotion();
+  const now = useNow();
+  const maxDeliverableId = deliverables.length > 0 ? Math.max(...deliverables.map((d) => d.id)) : 0;
+  // 読み込みが終わるまでは基準を決めない（既存の成果物を新着扱いしないため）
+  const { lastSeen, markSeen } = useSeenDeliverables(deliverablesLoaded ? maxDeliverableId : null);
+  const unseen = deliverablesLoaded ? deliverables.filter((d) => d.id > lastSeen && d.exists) : [];
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    // スマートフォンでは縮小せず、執務スペースが見える位置から表示する
+    const el = scrollRef.current;
+    if (el && el.scrollWidth > el.clientWidth) el.scrollLeft = (el.scrollWidth - el.clientWidth) * 0.45;
+  }, [view]);
+
   const pending = snapshot.approvals.filter((a) => a.status === 'pending');
-  const counts = Object.fromEntries(BOARD_COLUMNS.map((c) => [c.key, snapshot.jobs.filter((j) => j.column === c.key).length]));
-  const deliverableCount = snapshot.jobs.reduce((s, j) => s + j.deliverableCount, 0);
+  const running = snapshot.jobs.filter((j) => j.status === 'running');
+  const waiting = snapshot.jobs.filter((j) => j.status === 'queued' || j.status === 'paused');
+  const completedCount = snapshot.jobs.filter((j) => j.status === 'completed').length;
+  const demoMode = snapshot.settings.defaultAdapter === 'demo' || snapshot.jobs.some((j) => j.adapter === 'demo' && ['running', 'queued', 'awaiting_review'].includes(j.status));
+  const selectedEmployee = panel && typeof panel === 'object' ? snapshot.employees.find((e) => e.id === panel.employee) : undefined;
+  const lastEvent = events[events.length - 1];
+  const nameOf = (id: string | null) => (id ? (snapshot.employees.find((e) => e.id === id)?.name ?? '') : 'CEO');
+
+  const openDeliverable = (id: number) => {
+    markSeen(maxDeliverableId);
+    navigate(`library/${id}`);
+  };
+
+  const onTarget = (t: Target) => {
+    switch (t) {
+      case 'meeting':
+        navigate('request');
+        break;
+      case 'whiteboard':
+        navigate('board');
+        break;
+      case 'ceo':
+        setPanel('ceo');
+        break;
+      case 'shelf':
+        setPanel('shelf');
+        break;
+      case 'achievements':
+        setPanel('achievements');
+        break;
+      case 'entrance':
+        setPanel('entrance');
+        break;
+    }
+  };
+
+  const panelNode = (() => {
+    const close = () => setPanel(null);
+    if (!panel) return null;
+    if (typeof panel === 'object') return selectedEmployee ? <EmployeePanel e={selectedEmployee} snapshot={snapshot} navigate={navigate} onClose={close} /> : null;
+    switch (panel) {
+      case 'ceo':
+        return <CeoPanel snapshot={snapshot} onClose={close} />;
+      case 'shelf':
+        return <ShelfPanel deliverables={deliverables} snapshot={snapshot} lastSeen={lastSeen} onOpen={openDeliverable} onClose={close} />;
+      case 'achievements':
+        return <AchievementsPanel snapshot={snapshot} deliverables={deliverables} onClose={close} />;
+      case 'events':
+        return <EventsPanel events={events} snapshot={snapshot} onClose={close} />;
+      case 'entrance':
+        return <EntrancePanel snapshot={snapshot} onClose={close} />;
+    }
+  })();
 
   return (
-    <div className="office-layout">
-      <section className="floor" aria-label="オフィスの見取り図">
-        <div className="room room-ceo">
-          <div className="room-label">社長室</div>
-          <div className="ceo-desk">
-            <div className="desk-person">
-              {pending.length > 0 && <span className="bubble tone-review">{pending.length}</span>}
-              <Avatar color="#3b3f4a" ceo />
-            </div>
-            <div className="desk-table wide">
-              <div className="papers">{pending.length > 0 && <i />}</div>
-            </div>
-            <div className="nameplate">
-              <span className="name">植村和也</span>
-              <span className="muted">CEO</span>
-            </div>
+    <div className="hq">
+      <div className="hq-hud" role="region" aria-label="会社の状況">
+        <details className={`mode-chip ${demoMode ? 'is-demo' : 'is-real'}`}>
+          <summary>{demoMode ? 'デモモード' : '実接続モード'}</summary>
+          <div className="mode-detail">
+            {demoMode
+              ? 'デモ実行の案件は、定型の手順と定型テキストで流れを確認するためのものです。実際のAIによる調査・制作ではありません。成果物には「デモ」と表示されます。'
+              : '新しい依頼は Claude Code が実際に作業します。費用・利用枠を消費します。'}{' '}
+            <a href="#/settings">実行方式の設定</a>
           </div>
-          <button type="button" className="room-action" onClick={() => navigate('approvals')}>
-            {pending.length > 0 ? `承認待ち ${pending.length}件を確認する` : '承認待ちはありません'}
+        </details>
+        <button type="button" className="hud-stat" onClick={() => navigate('board')} data-testid="hud-working">
+          <span className="hud-num tone-text-working">{running.length}</span>
+          <span>作業中</span>
+          {waiting.length > 0 && <span className="muted small">（待ち {waiting.length}）</span>}
+        </button>
+        <button type="button" className={`hud-stat ${pending.length ? 'attention' : ''}`} onClick={() => setPanel('ceo')} data-testid="hud-pending">
+          <span className="hud-num tone-text-review">{pending.length}</span>
+          <span>承認待ち</span>
+        </button>
+        {running.map((j) => (
+          <div key={j.id} className="hud-running">
+            <span className="pulse-dot" aria-hidden />
+            <a href={`#/jobs/${j.id}`} className="hud-job">
+              #{j.id} {j.title}
+            </a>
+            <span className="muted small">{j.currentStageLabel}</span>
+            <JobActions job={{ ...j, actions: j.actions.filter((a) => a.action === 'pause' || a.action === 'cancel') }} />
+          </div>
+        ))}
+        <div className="hud-right">
+          <button type="button" className="btn small ghost" onClick={() => setPanel('events')} title={lastEvent ? `${nameOf(lastEvent.employeeId)}：${lastEvent.label}` : ''}>
+            出来事
+          </button>
+          <button type="button" className="btn small ghost" aria-pressed={reduced} onClick={() => setPref(reduced ? 'off' : 'on')}>
+            {reduced ? '動きを戻す' : '動きを減らす'}
+          </button>
+          <button type="button" className="btn small primary" onClick={() => navigate('request')}>
+            仕事を依頼
           </button>
         </div>
+      </div>
 
-        <div className="room room-work">
-          <div className="room-label">執務エリア</div>
-          <div className="desks">
-            {snapshot.employees.map((e) => (
-              <Desk key={e.id} e={e} selected={e.id === selectedId} onSelect={() => setSelectedId(e.id === selectedId ? null : e.id)} />
-            ))}
-          </div>
-        </div>
-
-        <div className="room room-meeting">
-          <div className="room-label">会議室</div>
-          <div className="meeting-table" aria-hidden>
-            <i />
-            <i />
-            <i />
-            <i />
-          </div>
-          <button type="button" className="room-action" onClick={() => navigate('request')}>
-            新しい仕事を依頼する
+      <div className="hq-tabs" role="tablist" aria-label="表示の切り替え">
+        {(
+          [
+            ['office', 'オフィス'],
+            ['people', `社員 ${snapshot.employees.length}`],
+            ['jobs', `案件 ${running.length + waiting.length + pending.length}`],
+          ] as [MobileView, string][]
+        ).map(([k, label]) => (
+          <button key={k} type="button" role="tab" aria-selected={view === k} className={view === k ? 'active' : ''} onClick={() => setView(k)}>
+            {label}
           </button>
+        ))}
+      </div>
+
+      <div className={`hq-stage view-${view}`}>
+        <div className="hq-scene-scroll" ref={scrollRef}>
+          <OfficeScene
+            snapshot={snapshot}
+            selected={selectedEmployee?.id ?? null}
+            onSelectEmployee={(id) => setPanel((p) => (p && typeof p === 'object' && p.employee === id ? null : { employee: id }))}
+            onTarget={onTarget}
+            unseenCount={unseen.length}
+            onOpenNewest={() => unseen[0] && openDeliverable(unseen[0].id)}
+            completedCount={completedCount}
+            deliverableCount={deliverables.length}
+            fresh={fresh}
+            consume={consume}
+            reducedMotion={reduced}
+            now={now}
+          />
         </div>
 
-        <div className="room room-library">
-          <div className="room-label">資料室</div>
-          <div className="shelves" aria-hidden>
-            {Array.from({ length: 5 }, (_, i) => (
-              <div key={i} className="shelf">
-                {Array.from({ length: Math.min(6, Math.max(0, deliverableCount - i * 6)) }, (_, k) => (
-                  <i key={k} />
-                ))}
-              </div>
-            ))}
-          </div>
-          <button type="button" className="room-action" onClick={() => navigate('library')}>
-            成果物 {deliverableCount}件を見る
-          </button>
+        <div className="hq-list people-list">
+          {snapshot.employees.map((e) => {
+            const st = EMPLOYEE_STATUS[e.status];
+            return (
+              <button key={e.id} type="button" className="person-card" onClick={() => setPanel({ employee: e.id })}>
+                <Portrait look={appearanceOf(e.id)} outfitColor={e.color} size={52} />
+                <span className="person-main">
+                  <span className="strong">{e.name}</span> <span className="muted small">{e.roleTitle}</span>
+                  <span className="small">
+                    <Badge tone={st.tone}>{st.label}</Badge> {e.currentJob ? `#${e.currentJob.id} ${e.currentJob.title}` : e.statusDetail}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
         </div>
-      </section>
 
-      {selected ? (
-        <EmployeePanel e={selected} navigate={navigate} onClose={() => setSelectedId(null)} />
-      ) : (
-        <aside className="panel">
-          <h2>会社の状況</h2>
-          <p className="muted">社員をクリックすると、役割・状態・現在の案件・成果物・相談事項を確認できます。</p>
-          <ul className="stat-list">
-            {BOARD_COLUMNS.map((c) => (
-              <li key={c.key}>
-                <a href="#/board">{c.label}</a>
-                <strong>{counts[c.key]}</strong>
-              </li>
-            ))}
-          </ul>
-          <h3>実行の仕組み</h3>
-          <ul className="plain">
-            {snapshot.adapters.map((a) => (
-              <li key={a.id}>
-                <Badge tone={a.ok ? 'done' : 'cancelled'}>{a.ok ? '利用可' : '利用不可'}</Badge> {a.label}
-                {a.version ? `（${a.version}）` : ''}
-                {snapshot.settings.defaultAdapter === a.id && <span className="muted">・既定</span>}
-              </li>
-            ))}
-          </ul>
-          <p className="muted">同時実行数: {snapshot.runner.maxConcurrent}（実行中 {snapshot.runner.active}）</p>
-          <h3>状態の見方</h3>
-          <ul className="legend">
-            {Object.values(EMPLOYEE_STATUS).map((s) => (
-              <li key={s.label}>
-                <Badge tone={s.tone}>{s.label}</Badge>
-              </li>
-            ))}
-          </ul>
-          <p className="muted small">画面が動くのは実際に実行中（作業中）のときだけです。</p>
-        </aside>
-      )}
+        <div className="hq-list jobs-list">
+          {pending.map((a) => (
+            <a key={`a${a.id}`} className="job-row attention" href="#/approvals">
+              <Badge tone="review">承認待ち</Badge> {a.jobTitle}
+            </a>
+          ))}
+          {[...running, ...waiting].map((j) => (
+            <a key={j.id} className="job-row" href={`#/jobs/${j.id}`}>
+              <Badge tone={JOB_STATUS[j.status].tone}>{JOB_STATUS[j.status].label}</Badge> #{j.id} {j.title} {j.adapter === 'demo' && <DemoBadge />}
+            </a>
+          ))}
+          {pending.length + running.length + waiting.length === 0 && <p className="muted">進行中の案件はありません。</p>}
+          <a className="btn" href="#/board">
+            案件ボードを開く
+          </a>
+        </div>
+
+        {panelNode}
+      </div>
     </div>
   );
 }

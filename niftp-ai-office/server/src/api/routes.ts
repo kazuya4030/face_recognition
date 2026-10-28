@@ -41,6 +41,8 @@ export function registerRoutes(app: FastifyInstance, office: OfficeService, bus:
     });
   });
 
+  app.get('/api/office/events', async () => office.officeEvents());
+
   app.get<{ Params: IdParams }>('/api/jobs/:id', async (req) => office.jobDetail(parseId(req.params.id)));
 
   app.post<{ Body: Record<string, unknown> }>('/api/jobs', async (req, reply) => {

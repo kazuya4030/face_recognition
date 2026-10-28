@@ -93,12 +93,16 @@ export function ApprovalCard({
   );
 }
 
-export function useDeliverables() {
-  const [list, setList] = useState<DeliverableView[]>([]);
-  const reload = () => void api.deliverables().then(setList).catch(() => {});
+export function useDeliverablesState() {
+  const [state, setState] = useState<{ list: DeliverableView[]; loaded: boolean }>({ list: [], loaded: false });
+  const reload = () => void api.deliverables().then((list) => setState({ list, loaded: true })).catch(() => {});
   useEffect(reload, []);
   useChangeSignal(reload);
-  return list;
+  return state;
+}
+
+export function useDeliverables() {
+  return useDeliverablesState().list;
 }
 
 export function ApprovalsPage({ snapshot }: Props) {

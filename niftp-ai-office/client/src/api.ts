@@ -1,5 +1,8 @@
 // サーバーAPIの呼び出し。変更系には CSRF 対策の独自ヘッダーを付ける。
 import type { OfficeService } from '../../server/src/services/office.ts';
+import type { OfficeEvent } from '../../server/src/services/officeEvents.ts';
+
+export type { OfficeEvent };
 
 export type Snapshot = ReturnType<OfficeService['snapshot']>;
 export type JobSummary = Snapshot['jobs'][number];
@@ -22,6 +25,7 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
 
 export const api = {
   state: () => request<Snapshot>('GET', '/api/state'),
+  officeEvents: () => request<OfficeEvent[]>('GET', '/api/office/events'),
   job: (id: number) => request<JobDetail>('GET', `/api/jobs/${id}`),
   createJob: (body: Record<string, unknown>) => request<JobDetail>('POST', '/api/jobs', body),
   jobAction: (id: number, action: string, body: Record<string, unknown> = {}) => request<JobDetail>('POST', `/api/jobs/${id}/actions/${action}`, body),

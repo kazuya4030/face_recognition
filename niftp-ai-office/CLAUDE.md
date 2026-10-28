@@ -18,6 +18,14 @@ niftp-ai-office/
     app.ts      各層の組み立て / index.ts 起動
   server/test/  vitest（業務フロー・偽CLIでのアダプター・防御）
   client/src/   React 画面。pages/ に画面ごとのコンポーネント
+    office/     オフィス画面の描画（SVG のアイソメトリック表示。3Dエンジンは使わない）
+      iso.ts        投影計算（床座標 x,y,z → 画面座標）と描画順のキー
+      layout.ts     家具・壁・席の配置データ（模様替えはこのデータを変える）
+      appearance.ts 社員の見た目（髪型・服装・小物・デスク周り）。将来サーバー保存に置き換えられる形
+      Character.tsx / Furniture.tsx / Room.tsx  人物・家具・床と壁の描画
+      OfficeScene.tsx  奥から手前へ並べて描画し、名札・通知・演出を最前面に重ねる
+      Panels.tsx       社員・CEOのデスク・資料棚・実績ボードなどの詳細パネル
+      state.ts         出来事の取得、動きを減らす設定、資料棚の既読（閲覧者ごとの localStorage）
   scripts/e2e.mjs  Playwright による画面の一連確認
   data/         実行データ（DB・案件ごとの作業ディレクトリ・成果物の保存版）。git 管理外
 ```
@@ -43,10 +51,14 @@ niftp-ai-office/
 9. **外部に影響する処理（メール送信・外部公開・支払い・ファイル削除）は自動実行しない**。必要ならAIに確認事項として挙げさせ、CEOが判断する。
 10. **上限を外さない**。ターン数・費用・時間・1日の工程数・1案件の実行回数は `SETTINGS_LIMITS` の範囲で設定する。
 11. サーバーは `127.0.0.1` / `localhost` / `::1` でのみ待ち受ける（`config.ts` で強制）。変更系 API は `X-NIFTP-Office: 1` ヘッダー必須。
-12. Claude Code CLI の仕様を推測で使わない。フラグを追加・変更するときは `claude --help` と公式ドキュメント（https://code.claude.com/docs/en/headless 、/cli-reference）を確認し、`server/test/fixtures/fake-claude.mjs` とテストを更新する。
+12. **オフィスの演出は実際の記録と連動させる**。作業中の動き・進捗は社員の状態（`working`）と案件の工程から、吹き出し・書類の受け渡しは `/api/office/events`（実行履歴・成果物・承認の記録から導出、`services/officeEvents.ts`）からだけ出す。社員の発言・会話・成果・能力値・売上などを作って表示しない。まばたき・呼吸など、状態と無関係な装飾は待機中でもよい。
+13. 演出は操作を妨げない（`pointer-events: none`、クリック対象は動かさない）。見逃しても同じ情報を「出来事」パネルと案件履歴で確認できること。`data-motion="reduced"` のときはアニメーションを止める。
+14. Claude Code CLI の仕様を推測で使わない。フラグを追加・変更するときは `claude --help` と公式ドキュメント（https://code.claude.com/docs/en/headless 、/cli-reference）を確認し、`server/test/fixtures/fake-claude.mjs` とテストを更新する。
 
 ## 拡張の指針
 
 - 並列実行: `AppConfig.maxConcurrentRuns` を上げる。`JobRunner.kick()` は既に複数件を取り出せる形。同一作業ディレクトリへの同時書き込みが起きないこと（案件単位で分離済み）と、1日の上限判定の競合に注意。
 - 新しい実行方式: `ExecutionAdapter` を実装し `app.ts` の `adapters` に追加、`AdapterId` を拡張する。
-- 社員の追加: 現状は初期4名の編集のみ。追加する場合は `employees` への INSERT と、役割（roleKey）による工程割り当て（`stagesOf`）の見直しが必要。
+- 家具の追加・模様替え: `office/layout.ts` の `FURNITURE` に追加し、新しい種類なら `Furniture.tsx` に描画を足す。`target` を付けるとクリックで機能につながる。
+- 社員の見た目の変更: `office/appearance.ts` の `Appearance` を保存できるようにすれば、描画側は変更不要。
+- 社員の追加: 現状は初期4名の編集のみ（席は `DESK_SLOTS` に6名分）。追加する場合は `employees` への INSERT と、役割（roleKey）による工程割り当て（`stagesOf`）の見直しが必要。

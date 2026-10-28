@@ -18,6 +18,7 @@ import type { ExecutionAdapter } from '../runner/adapter.ts';
 import type { JobRunner } from '../runner/jobRunner.ts';
 import { isTextMime, snapshotPathFor, stageLabel } from '../runner/workspace.ts';
 import { now, type Repo } from '../store/repo.ts';
+import { deriveOfficeEvents } from './officeEvents.ts';
 
 export class UserError extends Error {
   constructor(message: string, readonly status = 400) {
@@ -187,6 +188,11 @@ export class OfficeService {
       adapters: this.adapterInfo(),
       runner: { active: this.runner.activeCount(), maxConcurrent: 1 },
     };
+  }
+
+  /** オフィス画面の演出用イベント（直近のみ）。実行履歴・成果物・承認の記録から導出する。 */
+  officeEvents(limit = 40) {
+    return deriveOfficeEvents(this.repo.listJobs(), this.repo.listRuns(), this.repo.listDeliverables(), this.repo.listApprovals(), limit);
   }
 
   jobDetail(id: number) {

@@ -1,17 +1,25 @@
-// 初回起動時に登録するAI社員。名前・役割・作業指示は設定画面から変更できる。
+// 初回起動時に登録するAI社員。名前は仮の名前で、名前・役割・作業指示は設定画面から変更できる。
 import type { Employee } from './types.ts';
 
 type SeedEmployee = Omit<Employee, 'createdAt' | 'updatedAt'>;
 
 const FILE_TOOLS = ['Read', 'Write', 'Edit', 'Glob', 'Grep'];
 
+/** 以前の初期名。利用者が変更していない場合に限り、新しい仮の名前へ置き換える。 */
+export const LEGACY_DEFAULT_NAMES: Record<string, string> = {
+  manager: '業務責任者AI',
+  researcher: '調査・企画AI',
+  builder: '制作・開発AI',
+  qa: '品質確認AI',
+};
+
 export const SEED_EMPLOYEES: SeedEmployee[] = [
   {
     id: 'manager',
     sortOrder: 1,
-    name: '業務責任者AI',
+    name: 'ハル',
     roleKey: 'manager',
-    roleTitle: '業務責任者',
+    roleTitle: '業務責任者AI',
     description: '依頼を作業に分解し、担当・完了条件・進捗を管理する。',
     instructions: [
       'あなたは業務責任者です。CEOの依頼を実行可能な作業に分解します。',
@@ -24,9 +32,9 @@ export const SEED_EMPLOYEES: SeedEmployee[] = [
   {
     id: 'researcher',
     sortOrder: 2,
-    name: '調査・企画AI',
+    name: 'ミナ',
     roleKey: 'researcher',
-    roleTitle: '調査・企画',
+    roleTitle: '調査・企画AI',
     description: '情報を調べ、根拠付きの調査結果や企画案を作る。',
     instructions: [
       'あなたは調査・企画担当です。結論には必ず根拠（参照したURL・資料名・作業ディレクトリ内のファイル）を添えてください。',
@@ -38,9 +46,9 @@ export const SEED_EMPLOYEES: SeedEmployee[] = [
   {
     id: 'builder',
     sortOrder: 3,
-    name: '制作・開発AI',
+    name: 'ソラ',
     roleKey: 'builder',
-    roleTitle: '制作・開発',
+    roleTitle: '制作・開発AI',
     description: '資料、コード、その他の成果物を作る。',
     instructions: [
       'あなたは制作・開発担当です。依頼の完了条件を満たす成果物を作業ディレクトリの outputs/ に作成してください。',
@@ -52,9 +60,9 @@ export const SEED_EMPLOYEES: SeedEmployee[] = [
   {
     id: 'qa',
     sortOrder: 4,
-    name: '品質確認AI',
+    name: 'リツ',
     roleKey: 'qa',
-    roleTitle: '品質確認',
+    roleTitle: '品質確認AI',
     description: '依頼内容と成果物を照合し、不備と確認結果を報告する。',
     instructions: [
       'あなたは品質確認担当です。依頼の目的・完了条件と outputs/ の成果物を一項目ずつ照合してください。',
