@@ -23,10 +23,13 @@ export function JobActions({
   job,
   onDone,
   adapterChoice,
+  only,
 }: {
   job: JobSummary;
   onDone?: () => void;
   adapterChoice?: string;
+  /** 表示する操作を絞る（待ち行列の行など）。省略時はすべて。 */
+  only?: string[];
 }) {
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -49,8 +52,9 @@ export function JobActions({
       setBusy('');
     }
   };
-  const start = job.actions.find((a) => a.action === 'start');
-  const resume = job.actions.find((a) => a.action === 'resume');
+  const actions = only ? job.actions.filter((a) => only.includes(a.action)) : job.actions;
+  const start = actions.find((a) => a.action === 'start');
+  const resume = actions.find((a) => a.action === 'resume');
   return (
     <div className="job-actions">
       {start?.enabled && job.resumePoint && (
@@ -61,11 +65,11 @@ export function JobActions({
       {resume?.enabled && (
         <input className="resume-answer" value={answer} maxLength={4000} onChange={(e) => setAnswer(e.target.value)} placeholder="再開時の回答・指示（任意）" aria-label="再開時の回答・指示" />
       )}
-      {job.actions.map((a) => (
+      {actions.map((a) => (
         <button
           key={a.action}
           type="button"
-          className={`btn ${(a.action === 'start' && !job.resumePoint) || a.action === 'resume' ? 'primary' : ''} ${a.action === 'cancel' ? 'danger' : ''}`}
+          className={`btn ${(a.action === 'start' && !job.resumePoint) || a.action === 'resume' ? 'primary' : ''} ${a.action === 'cancel' || a.action === 'halt' ? 'danger' : ''}`}
           disabled={!a.enabled || busy !== ''}
           title={a.reason}
           onClick={() => run(a.action, a.action === 'start' ? 'beginning' : undefined)}
@@ -78,11 +82,11 @@ export function JobActions({
         </button>
       ))}
       {error && <span className="inline-error">{error}</span>}
-      {job.actions.some((a) => !a.enabled && a.reason) && (
+      {!only && job.actions.some((a) => !a.enabled && a.reason) && (
         <details className="action-reasons">
           <summary>押せない操作の理由</summary>
           <ul>
-            {job.actions
+            {actions
               .filter((a) => !a.enabled)
               .map((a) => (
                 <li key={a.action}>

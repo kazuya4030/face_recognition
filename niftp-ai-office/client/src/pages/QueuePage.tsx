@@ -65,7 +65,7 @@ export function QueuePage() {
               </a>
               {j.adapter === 'demo' ? <DemoBadge /> : <Badge tone="real">実案件</Badge>}
               <span className="muted small">工程: {j.currentStageLabel}</span>
-              <JobActions job={j} onDone={reload} />
+              <JobActions job={j} onDone={reload} only={['pause', 'halt', 'cancel']} />
             </div>
           ))
         )}
@@ -96,7 +96,7 @@ export function QueuePage() {
                     ↓
                   </button>
                 </span>
-                <JobActions job={j} onDone={reload} />
+                <JobActions job={j} onDone={reload} only={['pause', 'cancel']} />
               </li>
             ))}
           </ol>
@@ -120,7 +120,7 @@ export function QueuePage() {
                   受信箱で対応
                 </a>
               ) : (
-                <JobActions job={j} onDone={reload} />
+                <JobActions job={j} onDone={reload} only={['resume', 'cancel']} />
               )}
             </div>
           ))

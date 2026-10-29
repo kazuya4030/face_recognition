@@ -55,7 +55,7 @@ export const BOARD_COLUMNS: { key: JobSummary['column']; label: string; hint: st
   { key: 'error', label: 'エラー', hint: '失敗・タイムアウト・キャンセル' },
 ];
 
-export const ACTION_LABEL: Record<string, string> = { start: '開始', pause: '一時停止', resume: '再開', cancel: 'キャンセル' };
+export const ACTION_LABEL: Record<string, string> = { start: '開始', pause: '一時停止', resume: '再開', halt: '工程を止める', cancel: 'キャンセル' };
 
 export const SEVERITY: Record<string, { label: string; tone: string }> = {
   info: { label: '情報', tone: 'idle' },

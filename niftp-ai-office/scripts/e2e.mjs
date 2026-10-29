@@ -51,18 +51,22 @@ async function step(name, fn) {
     console.log(`OK   ${name}`);
   } catch (e) {
     results.push(['FAIL', name, e.message]);
+    await globalThis.__e2ePage?.screenshot({ path: path.join(shots, 'FAIL.png'), fullPage: true }).catch(() => {});
     console.log(`FAIL ${name}\n     ${e.message.split('\n')[0]}`);
     throw e;
   }
 }
 
-async function createJob(page, { title, scenario = 'normal', start = true, assignee = 'researcher' }) {
+async function createJob(page, { title, scenario = 'normal', start = true, assignee = 'researcher', reviewPlan = false, files = [] }) {
   await page.goto(`${base}/#/request`);
   await page.getByLabel(/タイトル/).fill(title);
   await page.getByLabel(/^目的/).fill('E2E確認用の目的');
   await page.getByLabel(/^依頼内容/).fill('競合3社の料金を比較してください');
   await page.getByLabel(/^完了条件/).fill('3社の料金表がある\n出典が明記されている');
   await page.getByLabel(/担当社員/).selectOption(assignee);
+  const planCheck = page.getByLabel(/作業計画をCEOが確認/);
+  if ((await planCheck.isChecked()) !== reviewPlan) await planCheck.click();
+  if (files.length > 0) await page.getByLabel('資料を添付').setInputFiles(files);
   await page.getByLabel('デモのシナリオ').selectOption(scenario);
   await page.getByRole('button', { name: start ? '登録して開始' : '登録のみ（未着手）' }).click();
   await page.waitForURL(/#\/jobs\/\d+/);
@@ -80,6 +84,7 @@ await startServer();
 const browser = await chromium.launch();
 const page = await browser.newPage({ viewport: { width: 1360, height: 900 } });
 page.on('dialog', (d) => d.accept());
+globalThis.__e2ePage = page;
 let jobId;
 
 try {
@@ -338,20 +343,85 @@ try {
     await page.screenshot({ path: path.join(shots, '09b-auto-rework.png'), fullPage: true });
   });
 
-  await step('会社情報を確定事項・仮説・未確認に分けて編集できる', async () => {
+  await step('会社の記憶: 方針・仮説・未決事項を版つきで編集でき、案件の指摘は明示的に登録したときだけ会社共通になる', async () => {
+    await page.goto(`${base}/#/memory`);
+    const hyp = page.locator('[data-testid="memory-section-hypothesis"]');
+    await hyp.getByText('登録はありません。').waitFor();
+    await page.locator('[data-testid="memory-section-undecided"]').getByText('実際の売上').waitFor();
+    await hyp.getByRole('textbox').fill('E2E確認用の仮説');
+    await hyp.getByRole('button', { name: '追加' }).click();
+    await hyp.getByText('E2E確認用の仮説').waitFor();
+    // 4a の差し戻しコメントは案件限定。会社共通の方針には入っていない
+    const policy = page.locator('[data-testid="memory-section-policy"]');
+    if (await policy.getByText('出典URLを各数値の横に追加').count()) throw new Error('案件の指摘が自動で会社方針に入っている');
+    const note = page.locator('.note-row', { hasText: '出典URLを各数値の横に追加してください' }).first();
+    await note.getByRole('button', { name: '会社共通の方針に登録…' }).click();
+    await note.getByRole('button', { name: '会社の記憶に登録する' }).click();
+    await policy.getByText('出典URLを各数値の横に追加してください').waitFor();
+    await page.screenshot({ path: path.join(shots, '09c-memory.png'), fullPage: true });
     await page.goto(`${base}/#/settings`);
-    const company = page.locator('#company');
-    if ((await company.getByLabel('仮説（検証が必要）').inputValue()) !== '') throw new Error('仮説が勝手に補完されている');
-    if (!(await company.getByLabel('未決定・未確認').inputValue()).includes('実際の売上')) throw new Error('未確認事項がない');
-    await company.getByLabel('仮説（検証が必要）').fill('E2E確認用の仮説');
-    await company.getByRole('button', { name: '保存' }).click();
-    await company.getByText('保存しました').waitFor();
-    await page.reload();
-    if ((await page.locator('#company').getByLabel('仮説（検証が必要）').inputValue()) !== 'E2E確認用の仮説') throw new Error('会社情報が保存されていない');
     await page.locator('.employee-editor').first().locator('summary').click();
     await page.locator('.employee-editor').first().getByLabel(/提出形式/).waitFor();
     await page.locator('.employee-editor').first().getByLabel(/人間に戻す条件/).waitFor();
-    await page.screenshot({ path: path.join(shots, '09c-settings-company.png'), fullPage: true });
+  });
+
+  await step('資料を添付して依頼し、作業計画を受信箱で確認・修正して承認すると、次の工程へ進む', async () => {
+    const memo = path.join(dataDir, '..', 'e2e-memo.md');
+    fs.writeFileSync(memo, '# 検証用メモ\n顧客の課題: 請求書の作成に時間がかかる\n');
+    const id = await createJob(page, { title: 'E2E 資料と計画確認', assignee: 'builder', reviewPlan: true, files: [memo] });
+    await page.locator('[data-testid="job-materials"]').getByText('e2e-memo.md').waitFor();
+    await page.goto(`${base}/#/inbox`);
+    const item = page.locator(`[data-testid="inbox-plan_review-${id}"]`);
+    await item.waitFor({ timeout: 20000 });
+    await item.getByText('ハルの作業計画').waitFor();
+    await item.getByText('資料#').first().waitFor();
+    await item.getByLabel('成果物作成').fill('メモの課題ごとに対応案を書く');
+    await page.screenshot({ path: path.join(shots, '09d-inbox-plan.png'), fullPage: true });
+    await item.getByRole('button', { name: '計画を承認して次へ' }).click();
+    await page.locator(`[data-testid="inbox-approval-${id}"]`).waitFor({ timeout: 30000 });
+    await page.screenshot({ path: path.join(shots, '09e-inbox-approval.png'), fullPage: true });
+    await page.goto(`${base}/#/jobs/${id}`);
+    await page.getByText('メモの課題ごとに対応案を書く').first().waitFor();
+    await page.locator('details.run-io summary').nth(1).click();
+    await page.locator('details.run-io[open]').getByText(/inputs\/attachments\//).first().waitFor();
+  });
+
+  await step('待ち行列: 全体停止中は新しい案件が始まらず、開始すると順番に実行される', async () => {
+    await page.goto(`${base}/#/queue`);
+    await page.getByRole('button', { name: '待ち行列を停止' }).click();
+    await page.locator('[data-testid="queue-state"]').getByText('停止中').waitFor();
+    const a = await createJob(page, { title: 'E2E 待ち行列A' });
+    const b = await createJob(page, { title: 'E2E 待ち行列B' });
+    await page.goto(`${base}/#/queue`);
+    await page.locator(`[data-testid="queue-waiting-${a}"]`).waitFor();
+    await page.locator(`[data-testid="queue-waiting-${b}"]`).getByRole('button', { name: '先頭へ' }).click();
+    await page.locator('.queue-list > li').first().getByText('E2E 待ち行列B').waitFor();
+    await page.waitForTimeout(1500);
+    if ((await page.locator('.queue-list > li').count()) !== 2) throw new Error('停止中なのに実行が始まった');
+    await page.screenshot({ path: path.join(shots, '09f-queue.png'), fullPage: true });
+    await page.getByRole('button', { name: '待ち行列を開始' }).click();
+    await page.goto(`${base}/#/jobs/${a}`);
+    await page.locator('.page-head .badge', { hasText: '確認待ち' }).waitFor({ timeout: 40000 });
+    void b;
+  });
+
+  await step('業務状況: 進行・停止・判断待ち・利用状況を表示し、バックアップを作成できる', async () => {
+    await page.goto(`${base}/#/status`);
+    await page.locator('[data-testid="status-decisions"]').getByText(/CEOが次に判断すること/).waitFor();
+    await page.locator('[data-testid="usage"]').getByText('今月').waitFor();
+    await page.getByRole('button', { name: '今すぐバックアップを作成' }).click();
+    await page.locator('[data-testid="backups"]').getByText(/作成しました/).waitFor();
+    await page.locator('[data-testid="backups"]').getByRole('link', { name: 'ダウンロード' }).first().waitFor();
+    await page.screenshot({ path: path.join(shots, '09g-status.png'), fullPage: true });
+  });
+
+  await step('承認済みの成果物を、版を特定して次の依頼の参照資料にできる', async () => {
+    await page.goto(`${base}/#/library`);
+    await page.getByLabel('CEOが承認した版の成果物だけを表示').check();
+    await page.getByRole('button', { name: 'この成果物を参照して依頼' }).first().click();
+    await page.waitForURL(/#\/request\?ref=\d+/);
+    await page.locator('.approved-picker input:checked').first().waitFor({ state: 'attached' });
+    if (!(await page.locator('.approved-picker').getByText(/第\d+版・承認#\d+/).first().isVisible())) throw new Error('参照元の版が表示されない');
   });
 
   await step('案件ボードでデモ案件と実案件を分けて表示できる', async () => {
