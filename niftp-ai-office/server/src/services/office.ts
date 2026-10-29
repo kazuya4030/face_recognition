@@ -401,7 +401,10 @@ export class OfficeService {
           status: 'draft',
           feedback: appendFeedback(job.feedback, `【第${approval.revision}版への差し戻し】\n${comment}`),
           resumeStageKind: 'execute',
-          statusNote: `第${approval.revision}版を差し戻し済み。「続きから開始」で成果物作成から修正します（作業計画・調査結果は引き継ぎ）。`,
+          statusNote:
+            stagesOf(job, this.repo.listEmployees()).findIndex((st) => st.kind === 'execute') > 0
+              ? `第${approval.revision}版を差し戻し済み。「続きから開始」で成果物作成から修正します（作業計画・調査結果は引き継ぎ）。`
+              : `第${approval.revision}版を差し戻し済み。「開始」で成果物作成から修正します。`,
         });
         this.ceoLog(job.id, `第${approval.revision}版を差し戻し: ${comment}`);
       }
