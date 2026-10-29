@@ -1,13 +1,23 @@
 // 永続化層。SQL はこのファイルに閉じ込め、業務処理側はドメイン型だけを扱う。
 import type { DatabaseSync } from 'node:sqlite';
 import { EMPLOYEE_DEFAULTS_VERSION, LEGACY_DEFAULT_NAMES, SEED_COMPANY, SEED_EMPLOYEES } from '../domain/seed.ts';
+import { SEED_TEMPLATES } from '../domain/templates.ts';
 import {
   DEFAULT_SETTINGS,
   NOT_CALLED_NOTE,
   type Activity,
   type AdapterId,
   type Approval,
+  type Attachment,
+  type CeoNote,
   type CompanyProfile,
+  type HoldKind,
+  type JobTemplate,
+  type MemoryItem,
+  type MemoryKind,
+  type MemoryRef,
+  type Question,
+  type SourceRecord,
   type Deliverable,
   type Employee,
   type Job,
@@ -77,6 +87,15 @@ function toJob(r: Row): Job {
     revision: num(r.revision ?? 0),
     reviewRounds: num(r.review_rounds ?? 0),
     resumeStageKind: (nullableStr(r.resume_stage_kind) as StageKind | null) || null,
+    attachmentIds: json<number[]>(r.attachment_ids, []),
+    memoryRefs: json<MemoryRef[]>(r.memory_refs, []),
+    holdKind: (nullableStr(r.hold_kind) as HoldKind | null) || null,
+    holdSince: nullableStr(r.hold_since),
+    queueOrder: r.queue_order == null ? num(r.id) : num(r.queue_order),
+    stageInstructions: json<Partial<Record<StageKind, string>>>(r.stage_instructions, {}),
+    reviewPlan: Boolean(r.review_plan),
+    researchWeb: r.research_web == null ? true : Boolean(r.research_web),
+    templateId: nullableStr(r.template_id),
     currentStageIndex: num(r.current_stage_index),
     currentStepIndex: num(r.current_step_index),
     pauseRequested: Boolean(r.pause_requested),
@@ -109,6 +128,8 @@ function toRun(r: Row): Run {
     inputs: json<string[]>(r.inputs, []),
     outputs: json<string[]>(r.outputs, []),
     verdict: (str(r.verdict) || 'none') as ReviewVerdict,
+    memoryRefs: json<MemoryRef[]>(r.memory_refs, []),
+    sources: json<SourceRecord[]>(r.sources, []),
     summary: str(r.summary),
     error: str(r.error),
   };
@@ -147,6 +168,26 @@ function toDeliverable(r: Row): Deliverable {
   };
 }
 
+function toAttachment(r: Row): Attachment {
+  const n = (v: unknown) => (v == null ? null : num(v));
+  return {
+    id: num(r.id),
+    jobId: num(r.job_id),
+    kind: str(r.kind) as Attachment['kind'],
+    name: str(r.name),
+    mime: str(r.mime),
+    size: num(r.size),
+    sha256: str(r.sha256),
+    sourceJobId: n(r.source_job_id),
+    sourceDeliverableId: n(r.source_deliverable_id),
+    sourceRevision: n(r.source_revision),
+    sourceApprovalId: n(r.source_approval_id),
+    note: str(r.note),
+    removedAt: nullableStr(r.removed_at),
+    createdAt: str(r.created_at),
+  };
+}
+
 function toApproval(r: Row): Approval {
   return {
     id: num(r.id),
@@ -176,6 +217,12 @@ export type JobPatch = Partial<
     | 'revision'
     | 'reviewRounds'
     | 'resumeStageKind'
+    | 'attachmentIds'
+    | 'memoryRefs'
+    | 'holdKind'
+    | 'holdSince'
+    | 'queueOrder'
+    | 'stageInstructions'
     | 'currentStageIndex'
     | 'currentStepIndex'
     | 'pauseRequested'
@@ -193,6 +240,12 @@ const JOB_COLUMNS: Record<keyof JobPatch, string> = {
   revision: 'revision',
   reviewRounds: 'review_rounds',
   resumeStageKind: 'resume_stage_kind',
+  attachmentIds: 'attachment_ids',
+  memoryRefs: 'memory_refs',
+  holdKind: 'hold_kind',
+  holdSince: 'hold_since',
+  queueOrder: 'queue_order',
+  stageInstructions: 'stage_instructions',
   currentStageIndex: 'current_stage_index',
   currentStepIndex: 'current_step_index',
   pauseRequested: 'pause_requested',
@@ -204,7 +257,20 @@ const JOB_COLUMNS: Record<keyof JobPatch, string> = {
 export class Repo {
   constructor(readonly db: DatabaseSync) {}
 
+  private txDepth = 0;
+
+  /** トランザクション。入れ子で呼ばれた場合は外側のトランザクションにまとめる。 */
   transaction<T>(fn: () => T): T {
+    if (this.txDepth > 0) return fn();
+    this.txDepth++;
+    try {
+      return this.runTransaction(fn);
+    } finally {
+      this.txDepth--;
+    }
+  }
+
+  private runTransaction<T>(fn: () => T): T {
     this.db.exec('BEGIN');
     try {
       const result = fn();
@@ -219,6 +285,19 @@ export class Repo {
   seedIfEmpty(): void {
     if (!this.db.prepare('SELECT id FROM company_profile WHERE id = 1').get()) {
       this.db.prepare('INSERT INTO company_profile (id, data, updated_at) VALUES (1, ?, ?)').run(JSON.stringify(SEED_COMPANY), now());
+    }
+    // 会社情報の確定事項・仮説・未確認を、版つきの「会社の記憶」へ一度だけ移す（以後は記憶が正）
+    if (!this.db.prepare(`SELECT value FROM meta WHERE key = 'memory_migrated'`).get()) {
+      const stored = this.getCompanyRaw();
+      this.transaction(() => {
+        for (const t of stored.facts) this.addMemory('policy', t);
+        for (const t of stored.hypotheses) this.addMemory('hypothesis', t);
+        for (const t of stored.unknowns) this.addMemory('undecided', t);
+        this.db.prepare(`INSERT INTO meta (key, value) VALUES ('memory_migrated', '1')`).run();
+      });
+    }
+    for (const [i, t] of SEED_TEMPLATES.entries()) {
+      if (!this.db.prepare('SELECT id FROM templates WHERE id = ?').get(t.id)) this.saveTemplate(t, i + 1);
     }
     const count = num((this.db.prepare('SELECT COUNT(*) AS c FROM employees').get() as Row).c);
     if (count > 0) {
@@ -287,10 +366,24 @@ export class Repo {
   }
 
   // ---- 会社情報 ----
-  getCompany(): CompanyProfile {
+  private getCompanyRaw(): CompanyProfile {
     const r = this.db.prepare('SELECT data, updated_at FROM company_profile WHERE id = 1').get() as Row | undefined;
     const data = r ? json<Partial<CompanyProfile>>(r.data, {}) : {};
     return { ...SEED_COMPANY, ...data, updatedAt: r ? str(r.updated_at) : '' };
+  }
+
+  /** 会社情報。会社名・CEO・状態は company_profile、確定事項・仮説・未決事項は会社の記憶（有効な最新版）から作る。 */
+  getCompany(): CompanyProfile {
+    const base = this.getCompanyRaw();
+    const mem = this.listMemory();
+    const latest = [base.updatedAt, ...mem.map((m) => m.updatedAt)].reduce((a, b) => (b > a ? b : a), '');
+    return {
+      ...base,
+      facts: mem.filter((m) => m.kind === 'policy').map((m) => m.text),
+      hypotheses: mem.filter((m) => m.kind === 'hypothesis').map((m) => m.text),
+      unknowns: mem.filter((m) => m.kind === 'undecided').map((m) => m.text),
+      updatedAt: latest,
+    };
   }
 
   saveCompany(c: Omit<CompanyProfile, 'updatedAt'>): void {
@@ -300,15 +393,19 @@ export class Repo {
   }
 
   // ---- 案件 ----
-  createJob(input: Pick<
-    Job,
-    'title' | 'purpose' | 'details' | 'acceptanceCriteria' | 'assigneeId' | 'usePlanner' | 'useResearch' | 'useReviewer' | 'adapter' | 'demoScenario'
-  >): Job {
+  createJob(
+    input: Pick<
+      Job,
+      'title' | 'purpose' | 'details' | 'acceptanceCriteria' | 'assigneeId' | 'usePlanner' | 'useResearch' | 'useReviewer' | 'adapter' | 'demoScenario'
+    > &
+      Partial<Pick<Job, 'reviewPlan' | 'researchWeb' | 'templateId' | 'stageInstructions'>>,
+  ): Job {
     const t = now();
     const info = this.db
       .prepare(
-        `INSERT INTO jobs (title, purpose, details, acceptance_criteria, assignee_id, use_planner, use_research, use_reviewer, adapter, demo_scenario, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
+        `INSERT INTO jobs (title, purpose, details, acceptance_criteria, assignee_id, use_planner, use_research, use_reviewer, adapter, demo_scenario,
+           review_plan, research_web, template_id, stage_instructions, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
       )
       .run(
         input.title,
@@ -321,10 +418,16 @@ export class Repo {
         input.useReviewer ? 1 : 0,
         input.adapter,
         input.demoScenario,
+        input.reviewPlan ? 1 : 0,
+        input.researchWeb === false ? 0 : 1,
+        input.templateId ?? null,
+        JSON.stringify(input.stageInstructions ?? {}),
         t,
         t,
       );
-    return this.getJob(Number(info.lastInsertRowid))!;
+    const id = Number(info.lastInsertRowid);
+    this.db.prepare('UPDATE jobs SET queue_order = ? WHERE id = ?').run(id, id);
+    return this.getJob(id)!;
   }
 
   getJob(id: number): Job | undefined {
@@ -337,7 +440,7 @@ export class Repo {
   }
 
   listJobsByStatus(status: JobStatus): Job[] {
-    return (this.db.prepare('SELECT * FROM jobs WHERE status = ? ORDER BY updated_at, id').all(status) as Row[]).map(toJob);
+    return (this.db.prepare('SELECT * FROM jobs WHERE status = ? ORDER BY COALESCE(queue_order, id), id').all(status) as Row[]).map(toJob);
   }
 
   updateJob(id: number, patch: JobPatch): Job {
@@ -346,7 +449,7 @@ export class Repo {
       const sets = keys.map((k) => `${JOB_COLUMNS[k]} = ?`).join(', ');
       const values = keys.map((k) => {
         const v = patch[k];
-        return typeof v === 'boolean' ? (v ? 1 : 0) : (v ?? null);
+        return typeof v === 'boolean' ? (v ? 1 : 0) : v != null && typeof v === 'object' ? JSON.stringify(v) : (v ?? null);
       });
       this.db.prepare(`UPDATE jobs SET ${sets}, updated_at = ? WHERE id = ?`).run(...values, now(), id);
     }
@@ -367,13 +470,17 @@ export class Repo {
     employeeId: string;
     adapter: AdapterId;
     inputs: string[];
+    memoryRefs?: MemoryRef[];
   }): Run {
     const info = this.db
       .prepare(
-        `INSERT INTO runs (job_id, attempt, revision, stage_index, stage_kind, employee_id, adapter, status, inputs, started_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?)`,
+        `INSERT INTO runs (job_id, attempt, revision, stage_index, stage_kind, employee_id, adapter, status, inputs, memory_refs, started_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'running', ?, ?, ?)`,
       )
-      .run(input.jobId, input.attempt, input.revision, input.stageIndex, input.stageKind, input.employeeId, input.adapter, JSON.stringify(input.inputs), now());
+      .run(
+        input.jobId, input.attempt, input.revision, input.stageIndex, input.stageKind, input.employeeId, input.adapter,
+        JSON.stringify(input.inputs), JSON.stringify(input.memoryRefs ?? []), now(),
+      );
     return this.getRun(Number(info.lastInsertRowid))!;
   }
 
@@ -406,16 +513,35 @@ export class Repo {
       usage?: RunUsage | null;
       outputs?: string[];
       verdict?: ReviewVerdict;
+      sources?: SourceRecord[];
     },
   ): void {
     this.db
       .prepare(
-        `UPDATE runs SET status = ?, finished_at = ?, cost_usd = ?, cost_note = ?, num_turns = ?, summary = ?, error = ?, model = ?, usage = ?, outputs = ?, verdict = ? WHERE id = ?`,
+        `UPDATE runs SET status = ?, finished_at = ?, cost_usd = ?, cost_note = ?, num_turns = ?, summary = ?, error = ?, model = ?, usage = ?, outputs = ?, verdict = ?, sources = ? WHERE id = ?`,
       )
       .run(
         r.status, now(), r.costUsd, r.costNote, r.numTurns, r.summary, r.error,
-        r.model ?? '', r.usage ? JSON.stringify(r.usage) : null, JSON.stringify(r.outputs ?? []), r.verdict ?? 'none', id,
+        r.model ?? '', r.usage ? JSON.stringify(r.usage) : null, JSON.stringify(r.outputs ?? []), r.verdict ?? 'none', JSON.stringify(r.sources ?? []), id,
       );
+  }
+
+  /** 期間内（ISO 文字列の範囲）に開始した実接続の実行の費用合計と、費用を取得できなかった実行の数。 */
+  realCostBetween(fromIso: string, toIso: string): { knownUsd: number; unknownRuns: number; runs: number } {
+    const r = this.db
+      .prepare(
+        `SELECT COALESCE(SUM(cost_usd), 0) AS s, SUM(CASE WHEN cost_usd IS NULL AND cost_note != ? AND status != 'running' THEN 1 ELSE 0 END) AS u,
+                SUM(CASE WHEN cost_note != ? THEN 1 ELSE 0 END) AS n
+         FROM runs WHERE adapter != 'demo' AND started_at >= ? AND started_at < ?`,
+      )
+      .get(NOT_CALLED_NOTE, NOT_CALLED_NOTE, fromIso, toIso) as Row;
+    return { knownUsd: num(r.s), unknownRuns: num(r.u ?? 0), runs: num(r.n ?? 0) };
+  }
+
+  /** この実行（attempt）で工程に使った時間の合計（秒）。 */
+  attemptElapsedSec(jobId: number, attempt: number): number {
+    const rows = this.db.prepare('SELECT started_at, finished_at FROM runs WHERE job_id = ? AND attempt = ?').all(jobId, attempt) as Row[];
+    return rows.reduce((s, r) => s + Math.max(0, (Date.parse(str(r.finished_at) || now()) - Date.parse(str(r.started_at))) / 1000), 0);
   }
 
   /** この案件の実接続の実行で、報告された費用の合計と、費用を取得できなかった実行の数。 */
@@ -472,6 +598,127 @@ export class Repo {
     return (rows as Row[]).map(toDeliverable);
   }
 
+  // ---- 資料（添付・参照） ----
+  addAttachment(a: Omit<Attachment, 'id' | 'createdAt' | 'removedAt'>): Attachment {
+    const info = this.db
+      .prepare(
+        `INSERT INTO attachments (job_id, kind, name, mime, size, sha256, source_job_id, source_deliverable_id, source_revision, source_approval_id, note, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(a.jobId, a.kind, a.name, a.mime, a.size, a.sha256, a.sourceJobId, a.sourceDeliverableId, a.sourceRevision, a.sourceApprovalId, a.note, now());
+    return this.getAttachment(Number(info.lastInsertRowid))!;
+  }
+
+  getAttachment(id: number): Attachment | undefined {
+    const r = this.db.prepare('SELECT * FROM attachments WHERE id = ?').get(id) as Row | undefined;
+    return r ? toAttachment(r) : undefined;
+  }
+
+  listAttachments(jobId: number): Attachment[] {
+    return (this.db.prepare('SELECT * FROM attachments WHERE job_id = ? ORDER BY id').all(jobId) as Row[]).map(toAttachment);
+  }
+
+  removeAttachment(id: number): void {
+    this.db.prepare('UPDATE attachments SET removed_at = ? WHERE id = ? AND removed_at IS NULL').run(now(), id);
+  }
+
+  // ---- 社員からの質問 ----
+  addQuestion(q: Omit<Question, 'id' | 'createdAt' | 'answer' | 'answeredAt'>): Question {
+    const info = this.db
+      .prepare('INSERT INTO questions (job_id, run_id, stage_kind, employee_id, text, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .run(q.jobId, q.runId, q.stageKind, q.employeeId, q.text, now());
+    return this.listQuestions(q.jobId).find((x) => x.id === Number(info.lastInsertRowid))!;
+  }
+
+  listQuestions(jobId?: number): Question[] {
+    const rows = jobId == null
+      ? this.db.prepare('SELECT * FROM questions ORDER BY id').all()
+      : this.db.prepare('SELECT * FROM questions WHERE job_id = ? ORDER BY id').all(jobId);
+    return (rows as Row[]).map((r) => ({
+      id: num(r.id), jobId: num(r.job_id), runId: r.run_id == null ? null : num(r.run_id), stageKind: str(r.stage_kind) as StageKind,
+      employeeId: str(r.employee_id), text: str(r.text), answer: nullableStr(r.answer), answeredAt: nullableStr(r.answered_at), createdAt: str(r.created_at),
+    }));
+  }
+
+  answerQuestion(id: number, answer: string): void {
+    this.db.prepare('UPDATE questions SET answer = ?, answered_at = ? WHERE id = ? AND answer IS NULL').run(answer, now(), id);
+  }
+
+  // ---- CEO の指摘（案件限定） ----
+  addNote(n: Omit<CeoNote, 'id' | 'createdAt' | 'promotedItemId'>): CeoNote {
+    const info = this.db.prepare('INSERT INTO ceo_notes (job_id, kind, revision, text, created_at) VALUES (?, ?, ?, ?, ?)').run(n.jobId, n.kind, n.revision, n.text, now());
+    return this.listNotes().find((x) => x.id === Number(info.lastInsertRowid))!;
+  }
+
+  listNotes(jobId?: number): CeoNote[] {
+    const rows = jobId == null
+      ? this.db.prepare('SELECT * FROM ceo_notes ORDER BY id').all()
+      : this.db.prepare('SELECT * FROM ceo_notes WHERE job_id = ? ORDER BY id').all(jobId);
+    return (rows as Row[]).map((r) => ({
+      id: num(r.id), jobId: num(r.job_id), kind: str(r.kind) as CeoNote['kind'], revision: num(r.revision), text: str(r.text),
+      promotedItemId: r.promoted_item_id == null ? null : num(r.promoted_item_id), createdAt: str(r.created_at),
+    }));
+  }
+
+  markNotePromoted(noteId: number, itemId: number): void {
+    this.db.prepare('UPDATE ceo_notes SET promoted_item_id = ? WHERE id = ?').run(itemId, noteId);
+  }
+
+  // ---- 会社の記憶（版つき） ----
+  listMemory(includeArchived = false): MemoryItem[] {
+    const rows = this.db.prepare(`SELECT * FROM memory_items ${includeArchived ? '' : 'WHERE archived_at IS NULL'} ORDER BY id`).all() as Row[];
+    return rows.map((r) => ({
+      id: num(r.id), kind: str(r.kind) as MemoryKind, text: str(r.text), version: num(r.version),
+      sourceNoteId: r.source_note_id == null ? null : num(r.source_note_id), archivedAt: nullableStr(r.archived_at),
+      createdAt: str(r.created_at), updatedAt: str(r.updated_at),
+    }));
+  }
+
+  getMemory(id: number): MemoryItem | undefined {
+    return this.listMemory(true).find((m) => m.id === id);
+  }
+
+  addMemory(kind: MemoryKind, text: string, sourceNoteId: number | null = null): MemoryItem {
+    const t = now();
+    return this.transaction(() => {
+      const info = this.db.prepare('INSERT INTO memory_items (kind, text, version, source_note_id, created_at, updated_at) VALUES (?, ?, 1, ?, ?, ?)').run(kind, text, sourceNoteId, t, t);
+      const id = Number(info.lastInsertRowid);
+      this.db.prepare('INSERT INTO memory_versions (item_id, version, kind, text, archived, created_at) VALUES (?, 1, ?, ?, 0, ?)').run(id, kind, text, t);
+      return this.getMemory(id)!;
+    });
+  }
+
+  /** 内容・種類の変更、またはアーカイブ。版を 1 上げ、変更前の版は memory_versions に残る。 */
+  updateMemory(id: number, patch: { kind?: MemoryKind; text?: string; archived?: boolean }): MemoryItem {
+    const cur = this.getMemory(id)!;
+    const t = now();
+    const kind = patch.kind ?? cur.kind;
+    const text = patch.text ?? cur.text;
+    const archived = patch.archived ?? cur.archivedAt != null;
+    return this.transaction(() => {
+      this.db.prepare('UPDATE memory_items SET kind = ?, text = ?, version = version + 1, archived_at = ?, updated_at = ? WHERE id = ?').run(kind, text, archived ? (cur.archivedAt ?? t) : null, t, id);
+      this.db.prepare('INSERT INTO memory_versions (item_id, version, kind, text, archived, created_at) VALUES (?, ?, ?, ?, ?, ?)').run(id, cur.version + 1, kind, text, archived ? 1 : 0, t);
+      return this.getMemory(id)!;
+    });
+  }
+
+  /** 指定した ID と版の内容（実行時に固定した版を読み出す）。 */
+  memoryVersion(ref: MemoryRef): { kind: MemoryKind; text: string } | undefined {
+    const r = this.db.prepare('SELECT kind, text FROM memory_versions WHERE item_id = ? AND version = ?').get(ref.id, ref.version) as Row | undefined;
+    return r ? { kind: str(r.kind) as MemoryKind, text: str(r.text) } : undefined;
+  }
+
+  // ---- 業務テンプレート ----
+  listTemplates(): JobTemplate[] {
+    return (this.db.prepare('SELECT data FROM templates ORDER BY sort_order, id').all() as Row[]).map((r) => JSON.parse(str(r.data)) as JobTemplate);
+  }
+
+  saveTemplate(t: JobTemplate, sortOrder: number): void {
+    this.db
+      .prepare('INSERT INTO templates (id, sort_order, data, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at')
+      .run(t.id, sortOrder, JSON.stringify(t), now());
+  }
+
   // ---- 承認 ----
   createApproval(
     a: Pick<Approval, 'jobId' | 'attempt' | 'revision' | 'deliverableIds' | 'reviewVerdict' | 'requestedBy' | 'title' | 'summary' | 'items'>,
@@ -499,6 +746,16 @@ export class Repo {
 
   decideApproval(id: number, status: 'approved' | 'rejected' | 'superseded', comment: string): void {
     this.db.prepare(`UPDATE approvals SET status = ?, ceo_comment = ?, decided_at = ? WHERE id = ?`).run(status, comment, now(), id);
+  }
+
+  // ---- 待ち行列の状態（設定とは別に meta に保存） ----
+  queueRunning(): boolean {
+    const r = this.db.prepare(`SELECT value FROM meta WHERE key = 'queue_running'`).get() as Row | undefined;
+    return r ? str(r.value) === '1' : true;
+  }
+
+  setQueueRunning(running: boolean): void {
+    this.db.prepare(`INSERT INTO meta (key, value) VALUES ('queue_running', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(running ? '1' : '0');
   }
 
   // ---- 設定 ----

@@ -2,12 +2,14 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+export const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 export interface AppConfig {
   host: string;
   port: number;
   dataDir: string;
+  /** バックアップの保存先。データディレクトリとは別の場所にする（データを消してもバックアップが残るように）。 */
+  backupDir: string;
   clientDir: string;
   claudeBin: string;
   /** デモ実行アダプターの1手順あたりの待ち時間（ミリ秒）。 */
@@ -27,6 +29,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     host,
     port: Number(env.PORT ?? 4317),
     dataDir: path.resolve(env.NIFTP_DATA_DIR ?? path.join(projectRoot, 'data')),
+    backupDir: path.resolve(env.NIFTP_BACKUP_DIR ?? path.join(projectRoot, 'backups')),
     clientDir: path.join(projectRoot, 'dist/client'),
     claudeBin: env.NIFTP_CLAUDE_BIN ?? 'claude',
     demoStepMs: Number(env.NIFTP_DEMO_STEP_MS ?? 1200),

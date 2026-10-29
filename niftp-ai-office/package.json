@@ -5,7 +5,7 @@
   "description": "NIFTP AI Office — CEOがAI社員に仕事を依頼・管理するローカルWebアプリ（初期版）",
   "type": "module",
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.16"
   },
   "scripts": {
     "dev": "concurrently -n server,client -c blue,green \"npm:dev:server\" \"npm:dev:client\"",
@@ -15,7 +15,11 @@
     "start": "tsx server/src/index.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "e2e": "node scripts/e2e.mjs"
+    "e2e": "node scripts/e2e.mjs",
+    "backup": "tsx server/src/ops/cli.ts backup",
+    "backup:verify": "tsx server/src/ops/cli.ts verify",
+    "restore": "tsx server/src/ops/cli.ts restore",
+    "doctor": "tsx server/src/ops/cli.ts doctor"
   },
   "dependencies": {
     "@fastify/static": "^10.1.8",

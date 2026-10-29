@@ -16,6 +16,7 @@ export async function makeApp(dataDir: string, overrides: Partial<AppConfig> = {
     host: '127.0.0.1',
     port: 4317,
     dataDir,
+    backupDir: path.join(dataDir, '..', `${path.basename(dataDir)}-backups`),
     clientDir: path.join(dataDir, 'no-client'),
     claudeBin: FAKE_CLAUDE,
     demoStepMs: 20,

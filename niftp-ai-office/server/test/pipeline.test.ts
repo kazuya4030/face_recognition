@@ -166,20 +166,32 @@ describe('Web調査の可否', () => {
 });
 
 describe('人間に戻す条件と上限', () => {
-  it('blocker の確認事項が出たら次の工程へ進まず、回答を添えて再開できる', async () => {
+  it('blocker の確認事項は質問として受信箱に届き、回答するとその工程を回答つきでやり直す', async () => {
     const dataDir = tempDataDir();
     app = await makeApp(dataDir);
     const id = await startJob(app, { ...FULL, details: '比較 [fake:blocker]' });
     let d = await detailOf(app, id);
     expect(stagesRun(d)).toEqual(['plan:succeeded']);
-    expect(d.job.status).toBe('paused');
-    expect(d.job.statusNote).toContain('予算が未確定');
-    await api(app, 'POST', `/api/jobs/${id}/actions/resume`, { comment: '予算は仮説として扱ってください' });
-    await waitFor(() => app!.repo.getJob(id)!.status !== 'queued' && app!.repo.getJob(id)!.status !== 'running');
+    expect(d.job).toMatchObject({ status: 'paused', holdKind: 'question' });
+    // 質問は受信箱に、案件・担当・理由つきで届く。汎用の「再開」では進めない
+    const item = (await api(app, 'GET', '/api/inbox')).body.find((x: any) => x.jobId === id);
+    expect(item).toMatchObject({ kind: 'question', employeeId: 'manager', employeeName: 'ハル' });
+    expect(item.questions[0].text).toContain('予算が未確定');
+    expect((await api(app, 'POST', `/api/jobs/${id}/actions/resume`, {})).status).toBe(409);
+    const q = item.questions[0];
+    expect((await api(app, 'POST', `/api/jobs/${id}/answers`, { answers: {} })).status).toBe(400);
+    const first = await api(app, 'POST', `/api/jobs/${id}/answers`, { answers: { [q.id]: '予算は仮説として扱ってください' } });
+    expect(first.status).toBe(200);
+    // 二重送信しても重複実行しない
+    expect((await api(app, 'POST', `/api/jobs/${id}/answers`, { answers: { [q.id]: '予算は仮説として扱ってください' } })).status).toBe(409);
+    await app.runner.waitForIdle();
     d = await detailOf(app, id);
-    expect(stagesRun(d)).toEqual(['plan:succeeded', 'research:succeeded', 'execute1:succeeded', 'review1:succeeded']);
+    // 質問を出した作業計画を回答つきでやり直してから進む
+    expect(stagesRun(d)).toEqual(['plan:succeeded', 'plan:succeeded', 'research:succeeded', 'execute1:succeeded', 'review1:succeeded']);
     expect(probes(dataDir, id)[1].stdin).toContain('inputs/ceo_feedback.md');
     expect(fs.readFileSync(path.join(ws(dataDir, id), 'inputs/ceo_feedback.md'), 'utf8')).toContain('予算は仮説として扱ってください');
+    expect(d.questions[0]).toMatchObject({ answer: '予算は仮説として扱ってください' });
+    expect(d.notes.map((n: any) => n.kind)).toEqual(['answer']);
   });
 
   it('工程ごとの費用上限は案件の残り予算を超えない。案件の上限に達したら開始しない', async () => {

@@ -4,7 +4,9 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import type { JobAction } from '../domain/types.ts';
 import type { ChangeBus } from '../events.ts';
 import type { ExecutionAdapter } from '../runner/adapter.ts';
+import type { MaterialsService } from '../services/materials.ts';
 import { UserError, type OfficeService } from '../services/office.ts';
+import type { OperationsService } from '../services/operations.ts';
 
 type IdParams = { id: string };
 
@@ -14,7 +16,9 @@ function parseId(raw: string): number {
   return id;
 }
 
-export function registerRoutes(app: FastifyInstance, office: OfficeService, bus: ChangeBus, adapters: ExecutionAdapter[]): void {
+type Services = { office: OfficeService; materials: MaterialsService; ops: OperationsService };
+
+export function registerRoutes(app: FastifyInstance, { office, materials, ops }: Services, bus: ChangeBus, adapters: ExecutionAdapter[]): void {
   app.setErrorHandler((err, _req, reply: FastifyReply) => {
     if (err instanceof UserError) return reply.code(err.status).send({ error: err.message });
     const status = (err as { statusCode?: number }).statusCode;
@@ -52,7 +56,7 @@ export function registerRoutes(app: FastifyInstance, office: OfficeService, bus:
 
   app.post<{ Params: IdParams & { action: string }; Body: Record<string, unknown> }>('/api/jobs/:id/actions/:action', async (req) => {
     const action = req.params.action as JobAction;
-    if (!['start', 'pause', 'resume', 'cancel'].includes(action)) throw new UserError('未対応の操作です', 400);
+    if (!['start', 'pause', 'resume', 'halt', 'cancel'].includes(action)) throw new UserError('未対応の操作です', 400);
     const job = office.applyAction(parseId(req.params.id), action, req.body ?? {});
     return office.jobDetail(job.id);
   });
@@ -64,6 +68,56 @@ export function registerRoutes(app: FastifyInstance, office: OfficeService, bus:
   });
 
   app.get('/api/deliverables', async () => office.deliverablesWithExistence());
+
+  // ---- 資料（添付・承認済み成果物の参照） ----
+  app.post<{ Params: IdParams; Body: Record<string, unknown> }>('/api/jobs/:id/attachments', { bodyLimit: 2 * 1024 * 1024 }, async (req, reply) =>
+    reply.code(201).send(materials.upload(parseId(req.params.id), req.body ?? {})),
+  );
+  app.post<{ Params: IdParams; Body: Record<string, unknown> }>('/api/jobs/:id/references', async (req, reply) =>
+    reply.code(201).send(materials.addReference(parseId(req.params.id), req.body ?? {})),
+  );
+  app.post<{ Params: IdParams }>('/api/attachments/:id/remove', async (req) => {
+    materials.remove(parseId(req.params.id));
+    return { ok: true };
+  });
+  app.get<{ Params: IdParams }>('/api/attachments/:id/content', async (req) => materials.content(parseId(req.params.id)));
+  app.get('/api/approved-deliverables', async () => materials.approvedDeliverables());
+
+  // ---- 受信箱 ----
+  app.get('/api/inbox', async () => ops.inbox());
+  app.post<{ Params: IdParams; Body: Record<string, unknown> }>('/api/jobs/:id/answers', async (req) => ops.answerQuestions(parseId(req.params.id), req.body ?? {}));
+  app.post<{ Params: IdParams; Body: Record<string, unknown> }>('/api/jobs/:id/plan/approve', async (req) => ops.approvePlan(parseId(req.params.id), req.body ?? {}));
+  app.post<{ Params: IdParams; Body: Record<string, unknown> }>('/api/jobs/:id/plan/revise', async (req) => ops.revisePlan(parseId(req.params.id), req.body ?? {}));
+
+  // ---- 待ち行列 ----
+  app.get('/api/queue', async () => ops.queue());
+  app.post('/api/queue/start', async () => ops.setQueueRunning(true));
+  app.post('/api/queue/stop', async () => ops.setQueueRunning(false));
+  app.post<{ Params: IdParams; Body: { direction?: string } }>('/api/queue/:id/move', async (req) => ops.move(parseId(req.params.id), String(req.body?.direction ?? '')));
+
+  // ---- 会社の記憶 ----
+  app.get('/api/memory', async () => ops.memory());
+  app.post<{ Body: Record<string, unknown> }>('/api/memory', async (req, reply) => reply.code(201).send(ops.addMemory(req.body ?? {})));
+  app.put<{ Params: IdParams; Body: Record<string, unknown> }>('/api/memory/:id', async (req) => ops.updateMemory(parseId(req.params.id), req.body ?? {}));
+  app.post<{ Params: IdParams; Body: Record<string, unknown> }>('/api/notes/:id/promote', async (req) => ops.promoteNote(parseId(req.params.id), req.body ?? {}));
+
+  // ---- 業務状況・利用状況・テンプレート ----
+  app.get('/api/summary', async () => ops.summary());
+  app.get('/api/usage', async () => ops.usage());
+  app.get('/api/templates', async () => office.templates());
+
+  // ---- バックアップ（復元はサーバーを止めて npm run restore で行う） ----
+  app.get('/api/backups', async () => ops.backups());
+  app.post('/api/backups', async (_req, reply) => {
+    const { path: _p, ...info } = await ops.createBackup();
+    return reply.code(201).send(info);
+  });
+  app.get<{ Params: { name: string } }>('/api/backups/:name/download', async (req, reply) => {
+    const p = ops.backupFile(req.params.name);
+    reply.header('Content-Type', 'application/gzip');
+    reply.header('Content-Disposition', `attachment; filename="${req.params.name}"`);
+    return reply.send(fs.createReadStream(p));
+  });
 
   app.get<{ Params: IdParams }>('/api/deliverables/:id/content', async (req) => office.deliverableContent(parseId(req.params.id)));
 

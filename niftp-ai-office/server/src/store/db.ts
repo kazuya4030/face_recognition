@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -112,6 +112,76 @@ CREATE INDEX IF NOT EXISTS approvals_job ON approvals(job_id);
 
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
+CREATE TABLE IF NOT EXISTS attachments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id),
+  kind TEXT NOT NULL,
+  name TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  sha256 TEXT NOT NULL,
+  source_job_id INTEGER,
+  source_deliverable_id INTEGER,
+  source_revision INTEGER,
+  source_approval_id INTEGER,
+  note TEXT NOT NULL DEFAULT '',
+  removed_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS attachments_job ON attachments(job_id);
+
+CREATE TABLE IF NOT EXISTS questions (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id),
+  run_id INTEGER,
+  stage_kind TEXT NOT NULL,
+  employee_id TEXT NOT NULL,
+  text TEXT NOT NULL,
+  answer TEXT,
+  answered_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS questions_job ON questions(job_id);
+
+CREATE TABLE IF NOT EXISTS ceo_notes (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  job_id INTEGER NOT NULL REFERENCES jobs(id),
+  kind TEXT NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 0,
+  text TEXT NOT NULL,
+  promoted_item_id INTEGER,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ceo_notes_job ON ceo_notes(job_id);
+
+CREATE TABLE IF NOT EXISTS memory_items (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL,
+  text TEXT NOT NULL,
+  version INTEGER NOT NULL DEFAULT 1,
+  source_note_id INTEGER,
+  archived_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS memory_versions (
+  item_id INTEGER NOT NULL REFERENCES memory_items(id),
+  version INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  text TEXT NOT NULL,
+  archived INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (item_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS templates (
+  id TEXT PRIMARY KEY,
+  sort_order INTEGER NOT NULL,
+  data TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS company_profile (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   data TEXT NOT NULL,
@@ -135,6 +205,15 @@ const ADDED_COLUMNS: Record<string, [string, string][]> = {
     ['revision', 'INTEGER NOT NULL DEFAULT 0'],
     ['review_rounds', 'INTEGER NOT NULL DEFAULT 0'],
     ['resume_stage_kind', 'TEXT'],
+    ['attachment_ids', "TEXT NOT NULL DEFAULT '[]'"],
+    ['hold_kind', 'TEXT'],
+    ['hold_since', 'TEXT'],
+    ['queue_order', 'REAL'],
+    ['memory_refs', "TEXT NOT NULL DEFAULT '[]'"],
+    ['stage_instructions', "TEXT NOT NULL DEFAULT '{}'"],
+    ['review_plan', 'INTEGER NOT NULL DEFAULT 0'],
+    ['research_web', 'INTEGER NOT NULL DEFAULT 1'],
+    ['template_id', 'TEXT'],
   ],
   runs: [
     ['revision', 'INTEGER NOT NULL DEFAULT 0'],
@@ -143,6 +222,8 @@ const ADDED_COLUMNS: Record<string, [string, string][]> = {
     ['inputs', "TEXT NOT NULL DEFAULT '[]'"],
     ['outputs', "TEXT NOT NULL DEFAULT '[]'"],
     ['verdict', "TEXT NOT NULL DEFAULT 'none'"],
+    ['memory_refs', "TEXT NOT NULL DEFAULT '[]'"],
+    ['sources', "TEXT NOT NULL DEFAULT '[]'"],
   ],
   deliverables: [
     ['revision', 'INTEGER NOT NULL DEFAULT 0'],

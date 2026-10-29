@@ -109,17 +109,23 @@ export function availableActions(job: Job, ctx: ActionContext): ActionState[] {
     };
   })();
 
-  const resume: ActionState =
-    s === 'paused'
-      ? ctx.adapterAvailable
-        ? { action: 'resume', enabled: true, reason: '' }
-        : { action: 'resume', enabled: false, reason: ctx.adapterUnavailableReason }
-      : { action: 'resume', enabled: false, reason: '一時停止中の案件のみ再開できます' };
+  const resume: ActionState = (() => {
+    if (s !== 'paused') return { action: 'resume', enabled: false, reason: '一時停止中の案件のみ再開できます' };
+    if (job.holdKind === 'question') return { action: 'resume', enabled: false, reason: '社員からの質問に受信箱で回答すると再開します' };
+    if (job.holdKind === 'plan_review') return { action: 'resume', enabled: false, reason: '作業計画を受信箱で承認すると再開します' };
+    if (!ctx.adapterAvailable) return { action: 'resume', enabled: false, reason: ctx.adapterUnavailableReason };
+    return { action: 'resume', enabled: true, reason: '' };
+  })();
+
+  const halt: ActionState =
+    s === 'running'
+      ? { action: 'halt', enabled: true, reason: '実行中の工程を止めて保留にします（再開するとその工程をやり直します）' }
+      : { action: 'halt', enabled: false, reason: '作業中の案件のみ止められます' };
 
   const cancellable: JobStatus[] = ['draft', 'queued', 'running', 'paused', 'error', 'awaiting_review'];
   const cancel: ActionState = cancellable.includes(s)
     ? { action: 'cancel', enabled: true, reason: s === 'running' ? '実行中の処理を停止して記録します' : '' }
     : { action: 'cancel', enabled: false, reason: `「${JOB_STATUS_LABEL[s]}」の案件はキャンセルできません` };
 
-  return [start, pause, resume, cancel];
+  return [start, pause, resume, halt, cancel];
 }

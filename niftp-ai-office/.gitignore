@@ -7,3 +7,7 @@ e2e-artifacts/
 *.log
 .env
 .env.*
+# バックアップ（会社のデータを含む。リポジトリに含めない）
+backups/
+*.tar.gz
+data.before-restore-*

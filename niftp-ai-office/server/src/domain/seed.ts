@@ -17,7 +17,7 @@ export const LEGACY_DEFAULT_NAMES: Record<string, string> = {
  * 担当指示の版。利用者が一度も編集していない社員に限り、起動時にこの版の担当指示・提出形式・
  * 人間に戻す条件・参照情報・ツールへ更新する（編集済みの社員は変更しない）。
  */
-export const EMPLOYEE_DEFAULTS_VERSION = 2;
+export const EMPLOYEE_DEFAULTS_VERSION = 3;
 
 export const SEED_EMPLOYEES: SeedEmployee[] = [
   {
@@ -37,15 +37,18 @@ export const SEED_EMPLOYEES: SeedEmployee[] = [
     outputFormat: [
       'outputs/plan.md に次の順で書く:',
       '1. 依頼の要約（目的・提出物・制約）',
-      '2. 提出物ごとの表（提出物／担当工程／必要な入力／完了条件／確認方法）',
-      '3. 調査で集める情報と、その確認方法',
-      '4. 仮説として扱う事項と、未確認のまま残る事項',
+      '2. 必要な工程と担当（調査・企画／制作・開発／品質確認。不要な工程は「不要」と理由）',
+      '3. 工程ごとの入力と提出物、完了条件、確認方法の表',
+      '4. 不足情報（軽微＝仮定を明示して進める／重大＝結論や業務範囲を左右するため CEO に確認）',
+      '5. CEO の判断が必要になる箇所',
+      'あわせて最終回答の stageInstructions に、調査・成果物作成・レビューの各工程への案件固有の指示を書く。',
     ].join('\n'),
     escalation: [
-      '次の場合は questions に severity: blocker で書く（工程はそこで止まり、CEOの回答を待つ）:',
+      '次の場合は questions に severity: blocker で書く（CEO の受信箱に届き、回答を待つ）:',
+      '- 結論や業務範囲を左右する情報が不足していて、仮定では進められない',
       '- 依頼の目的や提出物が読み取れず、計画を立てられない',
       '- 外部への連絡・契約・支払い・公開をしないと進められない',
-      '上記以外の未確認事項は warning として計画に「仮説」「未確認」と明記し、作業は止めない。',
+      '成果に影響しない軽微な不足は、仮定を明示して計画に書き、作業は止めない（warning）。',
     ].join('\n'),
     refs: ['brief', 'company', 'feedback'],
     color: '#4f7cac',

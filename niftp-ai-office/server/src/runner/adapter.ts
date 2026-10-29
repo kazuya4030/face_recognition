@@ -1,5 +1,5 @@
 // AI実行部分の共通インターフェース。業務管理（JobRunner）はこの型だけを知っていればよい。
-import type { ActivityKind, AdapterId, CompanyProfile, Employee, Job, ReviewItem, ReviewVerdict, RunUsage, Settings, Stage } from '../domain/types.ts';
+import type { ActivityKind, AdapterId, CompanyProfile, Employee, Job, ReviewItem, ReviewVerdict, RunUsage, Settings, SourceRecord, Stage, StageKind } from '../domain/types.ts';
 import type { StageIO } from './workspace.ts';
 
 export interface StageEvent {
@@ -21,6 +21,8 @@ export interface StageContext {
   /** 実行日（UTC、YYYY-MM-DD）。出典の確認日などに使わせる。 */
   today: string;
   company: Omit<CompanyProfile, 'updatedAt'>;
+  /** 案件固有の、この工程への指示（テンプレート・作業計画の確認で決まる）。 */
+  instructions: string;
   /** この工程で使ってよい費用の上限（USD）。設定の工程上限と案件の残り予算の小さい方。 */
   budgetUsd: number;
   /** 案件専用の作業ディレクトリ（AIはここだけを扱う）。 */
@@ -62,6 +64,10 @@ export interface StageResult {
   verdict: ReviewVerdict;
   /** Web の利用状況（実接続のみ）。null は計測していないことを表す。 */
   web: WebStats | null;
+  /** 調査の出典（プログラムが実際のツール結果と照合済み）。 */
+  sources: SourceRecord[];
+  /** 作業計画が提案した、各工程への案件固有の指示。 */
+  stageInstructions?: Partial<Record<StageKind, string>>;
 }
 
 export interface WebStats {
@@ -93,7 +99,7 @@ export interface ExecutionAdapter {
 export function emptyResult(status: StageOutcome, patch: Partial<StageResult> = {}): StageResult {
   return {
     status, summary: '', items: [], evidence: [], error: '', costUsd: null, costNote: '', numTurns: null,
-    model: '', usage: null, verdict: 'none', web: null, ...patch,
+    model: '', usage: null, verdict: 'none', web: null, sources: [], ...patch,
   };
 }
 

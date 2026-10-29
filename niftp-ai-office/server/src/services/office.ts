@@ -16,6 +16,7 @@ import {
   type RefKey,
   type ReviewItem,
   type Settings,
+  type StageKind,
 } from '../domain/types.ts';
 import type { ChangeBus } from '../events.ts';
 import type { ExecutionAdapter } from '../runner/adapter.ts';
@@ -24,11 +25,9 @@ import { isTextMime, snapshotPathFor, stageLabel } from '../runner/workspace.ts'
 import { now, type Repo } from '../store/repo.ts';
 import { deriveOfficeEvents } from './officeEvents.ts';
 
-export class UserError extends Error {
-  constructor(message: string, readonly status = 400) {
-    super(message);
-  }
-}
+import { UserError } from './errors.ts';
+
+export { UserError };
 
 const LIMITS = {
   title: 120,
@@ -59,7 +58,7 @@ function lines(v: unknown, field: string): string[] {
 
 const ALLOWED_TOOLS = ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'WebSearch', 'WebFetch'];
 
-function text(v: unknown, field: string, max: number, required = false): string {
+export function text(v: unknown, field: string, max: number, required = false): string {
   if (v == null) v = '';
   if (typeof v !== 'string') throw new UserError(`${field}は文字列で入力してください`);
   const s = v.trim();
@@ -113,7 +112,7 @@ export class OfficeService {
     });
   }
 
-  private jobSummary(job: Job, employees: Employee[]) {
+  jobSummary(job: Job, employees: Employee[]) {
     const stages = stagesOf(job, employees);
     const stage = stages[job.currentStageIndex];
     const runs = this.repo.listRuns(job.id);
@@ -219,6 +218,7 @@ export class OfficeService {
       jobs,
       approvals: approvals.map((a) => ({ ...this.approvalView(a), jobTitle: jobs.find((j) => j.id === a.jobId)?.title ?? '', jobAdapter: jobs.find((j) => j.id === a.jobId)?.adapter ?? 'demo' })),
       settings: this.repo.getSettings(),
+      queueRunning: this.repo.queueRunning(),
       adapters: this.adapterInfo(),
       runner: { active: this.runner.activeCount(), maxConcurrent: 1 },
     };
@@ -239,7 +239,16 @@ export class OfficeService {
       activities: this.repo.listActivities(id),
       deliverables: this.deliverablesWithExistence(id),
       approvals: this.repo.listApprovals(id).map((a) => this.approvalView(a)),
+      attachments: this.repo.listAttachments(id),
+      questions: this.repo.listQuestions(id),
+      notes: this.repo.listNotes(id),
+      // 開始時に固定した会社の記憶（ID・版・その版の内容）
+      memoryUsed: job.memoryRefs.map((r) => ({ ...r, ...(this.repo.memoryVersion(r) ?? { kind: 'policy' as const, text: '（記録なし）' }) })),
     };
+  }
+
+  templates() {
+    return this.repo.listTemplates();
   }
 
   /** 確認依頼と、その対象の保存版（どの版のどのファイルを承認・差し戻ししたか）。 */
@@ -293,6 +302,9 @@ export class OfficeService {
     if (!(adapter in this.adapters)) throw new UserError('実行方式が不正です');
     const scenario = (body.demoScenario ?? 'normal') as DemoScenario;
     if (!['normal', 'error', 'timeout', 'rework'].includes(scenario)) throw new UserError('デモシナリオが不正です');
+    const stageInstructions = parseStageInstructions(body.stageInstructions);
+    const templateId = body.templateId == null || body.templateId === '' ? null : text(body.templateId, 'テンプレート', 64);
+    if (templateId && !this.repo.listTemplates().some((t) => t.id === templateId)) throw new UserError('テンプレートが存在しません');
     const job = this.repo.createJob({
       title: text(body.title, 'タイトル', LIMITS.title, true),
       purpose: text(body.purpose, '目的', LIMITS.purpose, true),
@@ -304,6 +316,10 @@ export class OfficeService {
       useReviewer: body.useReviewer !== false,
       adapter,
       demoScenario: adapter === 'demo' ? scenario : 'normal',
+      reviewPlan: body.reviewPlan === true,
+      researchWeb: body.researchWeb !== false,
+      templateId,
+      stageInstructions,
     });
     this.ceoLog(job.id, `案件を登録（担当: ${employees.find((e) => e.id === assigneeId)?.name}、実行方式: ${this.adapters[adapter].label}）`);
     if (body.startNow === true) this.applyAction(job.id, 'start', {});
@@ -333,10 +349,18 @@ export class OfficeService {
         const from = body.from === 'continue' ? 'continue' : 'beginning';
         const resumeAt = from === 'continue' ? resumeStageIndex(job, stagesOf(job, this.repo.listEmployees())) : 0;
         if (resumeAt == null) throw new UserError('続きから開始できる工程がありません。最初から開始してください。', 409);
+        // 実行に使う資料と会社の記憶の版を、開始時点で固定する
+        const attachmentIds = this.repo.listAttachments(id).filter((a) => !a.removedAt).map((a) => a.id);
+        const memoryRefs = this.repo.listMemory().map((m) => ({ id: m.id, version: m.version }));
         job = this.repo.updateJob(id, {
           status: 'queued',
           attempt: job.attempt + 1,
           reviewRounds: 0,
+          attachmentIds,
+          memoryRefs,
+          holdKind: null,
+          holdSince: null,
+          queueOrder: this.nextQueueOrder(),
           currentStageIndex: resumeAt,
           currentStepIndex: 0,
           pauseRequested: false,
@@ -346,7 +370,10 @@ export class OfficeService {
           finishedAt: null,
         });
         const stagesNow = stagesOf(job, this.repo.listEmployees());
-        this.ceoLog(id, `開始を指示（${job.attempt}回目、${this.adapters[job.adapter].label}、${resumeAt > 0 ? `「${stageLabel(stagesNow[resumeAt].kind)}」から` : '最初の工程から'}）`);
+        this.ceoLog(
+          id,
+          `開始を指示（${job.attempt}回目、${this.adapters[job.adapter].label}、${resumeAt > 0 ? `「${stageLabel(stagesNow[resumeAt].kind)}」から` : '最初の工程から'}、資料${attachmentIds.length}件・会社の記憶${memoryRefs.length}件を固定）${this.repo.queueRunning() ? '' : '。待ち行列が停止中のため、待ち行列を開始すると実行されます'}`,
+        );
         break;
       }
       case 'pause':
@@ -362,16 +389,21 @@ export class OfficeService {
         // 停止中の確認事項への回答があれば、以降の工程の入力（CEOからのコメント）に加える
         const answer = text(body.comment, '回答', LIMITS.comment);
         const feedback = answer ? appendFeedback(job.feedback, `【再開時の回答（${job.statusNote ? truncateNote(job.statusNote) : '一時停止中'}）】\n${answer}`) : job.feedback;
-        job = this.repo.updateJob(id, { status: 'queued', pauseRequested: false, statusNote: '', feedback });
+        if (answer) this.repo.addNote({ jobId: id, kind: 'resume', revision: job.revision, text: answer });
+        job = this.repo.updateJob(id, { status: 'queued', pauseRequested: false, statusNote: '', feedback, holdKind: null, holdSince: null });
         this.ceoLog(id, `再開を指示${answer ? `（回答: ${answer}）` : ''}`);
         break;
       }
+      case 'halt':
+        this.runner.halt(id);
+        this.ceoLog(id, '実行中の工程を止めるよう指示（案件は保留になり、再開するとその工程をやり直します）');
+        break;
       case 'cancel':
         if (this.runner.isActive(id)) {
           this.runner.cancel(id);
           this.ceoLog(id, 'キャンセルを指示（実行中の処理を停止します）');
         } else {
-          job = this.repo.updateJob(id, { status: 'cancelled', finishedAt: now(), pauseRequested: false, statusNote: '' });
+          job = this.repo.updateJob(id, { status: 'cancelled', finishedAt: now(), pauseRequested: false, statusNote: '', holdKind: null, holdSince: null });
           for (const a of this.repo.listApprovals(id)) if (a.status === 'pending') this.repo.decideApproval(a.id, 'superseded', '');
           this.ceoLog(id, 'キャンセル');
         }
@@ -397,6 +429,7 @@ export class OfficeService {
         this.ceoLog(job.id, `第${approval.revision}版を承認（ファイル${approval.deliverableIds.length}件）${comment ? `: ${comment}` : ''}`);
       } else {
         this.repo.decideApproval(id, 'rejected', comment);
+        this.repo.addNote({ jobId: job.id, kind: 'rejection', revision: approval.revision, text: comment });
         this.repo.updateJob(job.id, {
           status: 'draft',
           feedback: appendFeedback(job.feedback, `【第${approval.revision}版への差し戻し】\n${comment}`),
@@ -464,16 +497,35 @@ export class OfficeService {
 
   /** 会社情報の更新。確定事項・仮説・未決定（未確認）を分けて保存する。 */
   updateCompany(body: Record<string, unknown>): CompanyProfile {
-    this.repo.saveCompany({
+    const current = this.repo.getCompany();
+    const next = {
       name: text(body.name, '会社名', 60, true),
       ceo: text(body.ceo, 'CEO', 60, true),
       status: text(body.status, '法人の状態', 200, true),
-      facts: lines(body.facts, '確定事項'),
-      hypotheses: lines(body.hypotheses, '仮説'),
-      unknowns: lines(body.unknowns, '未決定・未確認'),
+    };
+    // 一覧で渡された場合は会社の記憶と同期する（増えた行は追加、消えた行はアーカイブ。版は記憶側で管理）
+    const lists: [keyof Pick<CompanyProfile, 'facts' | 'hypotheses' | 'unknowns'>, 'policy' | 'hypothesis' | 'undecided', string][] = [
+      ['facts', 'policy', '確定事項'],
+      ['hypotheses', 'hypothesis', '仮説'],
+      ['unknowns', 'undecided', '未決定・未確認'],
+    ];
+    const wanted = lists.map(([key, kind, label]) => [kind, body[key] == null ? null : lines(body[key], label)] as const);
+    this.repo.transaction(() => {
+      this.repo.saveCompany({ ...next, facts: current.facts, hypotheses: current.hypotheses, unknowns: current.unknowns });
+      for (const [kind, texts] of wanted) {
+        if (!texts) continue;
+        const items = this.repo.listMemory().filter((m) => m.kind === kind);
+        for (const m of items) if (!texts.includes(m.text)) this.repo.updateMemory(m.id, { archived: true });
+        for (const t of texts) if (!items.some((m) => m.text === t)) this.repo.addMemory(kind, t);
+      }
     });
     this.bus.changed();
     return this.repo.getCompany();
+  }
+
+  private nextQueueOrder(): number {
+    const jobs = this.repo.listJobs();
+    return jobs.reduce((m, j) => Math.max(m, j.queueOrder), 0) + 1;
   }
 
   private ceoLog(jobId: number, message: string) {
@@ -482,9 +534,23 @@ export class OfficeService {
 }
 
 /** CEOのコメントは版ごとに積み重ねる（古いものから切り詰める）。 */
-function appendFeedback(current: string, add: string): string {
+export function appendFeedback(current: string, add: string): string {
   const joined = current ? `${current}\n\n${add}` : add;
   return joined.length > LIMITS.feedback ? joined.slice(joined.length - LIMITS.feedback) : joined;
 }
 
 const truncateNote = (s: string) => (s.length > 60 ? `${s.slice(0, 60)}…` : s);
+
+const STAGE_KEYS: StageKind[] = ['plan', 'research', 'execute', 'review'];
+
+/** 工程ごとの案件固有の指示（テンプレート・作業計画の確認で編集）。 */
+export function parseStageInstructions(v: unknown): Partial<Record<StageKind, string>> {
+  if (v == null) return {};
+  if (typeof v !== 'object' || Array.isArray(v)) throw new UserError('工程ごとの指示の形式が不正です');
+  const out: Partial<Record<StageKind, string>> = {};
+  for (const k of STAGE_KEYS) {
+    const t = text((v as Record<string, unknown>)[k], `${k} の指示`, LIMITS.instructions);
+    if (t) out[k] = t;
+  }
+  return out;
+}

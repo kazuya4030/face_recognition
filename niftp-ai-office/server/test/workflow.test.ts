@@ -20,7 +20,7 @@ describe('デモ実行での一連の流れ', () => {
     expect(created.status).toBe(201);
     const id = created.body.job.id;
     expect(created.body.job.status).toBe('draft');
-    expect(actions(created.body)).toEqual({ start: true, pause: false, resume: false, cancel: true });
+    expect(actions(created.body)).toEqual({ start: true, pause: false, resume: false, halt: false, cancel: true });
     expect(employee(app, 'researcher').status).toBe('idle');
 
     await api(app, 'POST', `/api/jobs/${id}/actions/start`, {});
@@ -124,7 +124,7 @@ describe('デモ実行での一連の流れ', () => {
     const detail = (await api(app, 'GET', `/api/jobs/${id}`)).body;
     expect(detail.job.status).toBe('cancelled');
     expect(detail.runs.at(-1).status).toBe('cancelled');
-    expect(actions(detail)).toEqual({ start: false, pause: false, resume: false, cancel: false });
+    expect(actions(detail)).toEqual({ start: false, pause: false, resume: false, halt: false, cancel: false });
     expect((await api(app, 'POST', `/api/jobs/${id}/actions/start`, {})).status).toBe(409);
   });
 
@@ -211,9 +211,11 @@ describe('再起動', () => {
     expect(crashedDetail.runs).toHaveLength(1);
     expect(crashedDetail.runs[0].status).toBe('interrupted');
 
+    // 実行待ちは待ち行列に残るが、待ち行列が停止状態になり、CEO が開始するまで実行されない
     const queuedDetail = (await api(app, 'GET', `/api/jobs/${queued.id}`)).body;
-    expect(queuedDetail.job.status).toBe('paused');
+    expect(queuedDetail.job.status).toBe('queued');
     expect(queuedDetail.runs).toHaveLength(0);
+    expect((await api(app, 'GET', '/api/queue')).body.running).toBe(false);
   });
 
   it('終了時に実行中の工程は中断として記録される', async () => {

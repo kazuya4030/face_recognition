@@ -4,7 +4,9 @@
 // brief.md の内容で挙動を切り替える:
 //   [fake:hang] 応答しない / [fake:error] エラー結果 / [fake:nojson] 結果なしで終了 / [fake:nocost] 費用なし
 //   [fake:nooutput] 出力ファイルを作らない / [fake:reviewfail] レビューを常に不合格 / [fake:reviewfail-once] 第1版だけ不合格
-//   [fake:noweb] Web検索が失敗する / [fake:blocker] 作業計画で blocker を返す / [fake:samemodel] 常に同じモデル名
+//   [fake:noweb] Web検索が失敗する / [fake:blocker] 作業計画で blocker を返す（CEOのコメントがあれば返さない）
+//   [fake:samemodel] 常に同じモデル名 / [fake:fetchok] ページ本文の取得が成功する / [fake:slow] 結果を返す前に1.5秒待つ
+//   [fake:liar] 調査で、取得していない URL を「本文確認」と申告する
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -40,8 +42,11 @@ process.stdin.on('end', async () => {
     const noweb = brief.includes('[fake:noweb]');
     out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'w1', name: 'WebSearch', input: { query: 'テスト 検索' } }] } });
     out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'w1', is_error: noweb, content: noweb ? 'network error' : 'results' }] } });
+    const fetchOk = brief.includes('[fake:fetchok]');
     out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'w2', name: 'WebFetch', input: { url: 'https://example.com/a' } }] } });
-    out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'w2', is_error: true, content: 'proxy refused the connection' }] } });
+    out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'w2', is_error: !fetchOk, content: fetchOk ? 'page body' : 'proxy refused the connection' }] } });
+    out({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'w3', name: 'WebFetch', input: { url: 'https://example.org/b' } }] } });
+    out({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'w3', is_error: true, content: 'Request failed with status code 403' }] } });
     webStatus = noweb ? 'unavailable' : 'search_only';
   }
 
@@ -64,7 +69,9 @@ process.stdin.on('end', async () => {
   const withCost = !brief.includes('[fake:nocost]');
   const fail = stage === 'review' && (brief.includes('[fake:reviewfail]') && !brief.includes('[fake:reviewfail-once]') || (brief.includes('[fake:reviewfail-once]') && revision === 1));
   const questions = [{ text: '価格の前提を確認してください', severity: 'warning' }];
-  if (stage === 'plan' && brief.includes('[fake:blocker]')) questions.push({ text: '予算が未確定のため進められません', severity: 'blocker' });
+  const answered = fs.existsSync('inputs/ceo_feedback.md');
+  if (stage === 'plan' && brief.includes('[fake:blocker]') && !answered) questions.push({ text: '予算が未確定のため進められません', severity: 'blocker' });
+  if (brief.includes('[fake:slow]')) await new Promise((r) => setTimeout(r, 1500));
   if (fail) questions.push({ text: '出典と食い違う記述があります', severity: 'warning' });
   out({
     type: 'result', subtype: 'success', is_error: false, num_turns: 2, result: 'done',
@@ -76,7 +83,26 @@ process.stdin.on('end', async () => {
       deliverables: targets,
       evidence: ['https://example.com/source'],
       questions,
-      ...(stage === 'research' ? { webStatus } : {}),
+      ...(stage === 'research'
+        ? {
+            webStatus,
+            sources: [
+              { url: 'https://example.com/a', title: '出典A', retrievedAt: '2026-10-29', method: 'search_snippet', supports: '主張1' },
+              { url: 'https://example.org/b', title: '出典B', retrievedAt: '2026-10-29', method: 'fetch_failed', supports: '主張2' },
+              ...(brief.includes('[fake:liar]') ? [{ url: 'https://example.net/c', title: '出典C', method: 'fetched', supports: '主張3' }] : []),
+            ],
+          }
+        : {}),
+      ...(stage === 'plan'
+        ? {
+            stageInstructions: { research: '計画からの調査指示', execute: '計画からの作成指示', review: '' },
+            missingInfo: [
+              { text: '対象地域', impact: 'minor', assumption: '国内' },
+              ...(brief.includes('[fake:major]') && !answered ? [{ text: '比較の対象業界', impact: 'major' }] : []),
+            ],
+            ceoDecisions: ['推奨案の採否'],
+          }
+        : {}),
       ...(stage === 'review' ? { verdict: fail ? 'fail' : 'pass' } : {}),
     },
   });

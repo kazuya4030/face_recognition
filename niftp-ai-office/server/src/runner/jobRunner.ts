@@ -1,7 +1,7 @@
 // 実行キュー。実行待ちの案件を取り出し、工程ごとにアダプターへ渡して結果を記録する。
 // 同時実行数は config.maxConcurrentRuns（初期版は1）。並列化する場合もこのクラスの外側は変えずに済む。
 import { stagesOf } from '../domain/jobState.ts';
-import { NOT_CALLED_NOTE, type AdapterId, type Job, type ReviewItem, type ReviewVerdict, type RunStatus, type Settings, type Stage, type StageKind } from '../domain/types.ts';
+import { NOT_CALLED_NOTE, type AdapterId, type Attachment, type HoldKind, type Job, type ReviewItem, type ReviewVerdict, type RunStatus, type Settings, type Stage, type StageKind } from '../domain/types.ts';
 import type { AppConfig } from '../config.ts';
 import type { ChangeBus } from '../events.ts';
 import { now, type Repo } from '../store/repo.ts';
@@ -11,6 +11,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  attachmentPathFor,
   changedOutputs,
   outputMtimes,
   prepareWorkspace,
@@ -37,7 +38,7 @@ export class JobRunner {
 
   /**
    * 起動時の復旧。前回の停止で「実行中」のまま残った記録を中断扱いにし、自動では再実行しない。
-   * 実行待ちだった案件も、意図しない実行を避けるため一時停止にしてCEOの再開を待つ。
+   * 実行待ちの案件は待ち行列に残したまま、待ち行列を停止状態にして CEO の再開を待つ。
    */
   recoverOnStartup(): void {
     for (const run of this.repo.listRunningRuns()) {
@@ -55,14 +56,19 @@ export class JobRunner {
       this.repo.updateJob(job.id, {
         status: 'error',
         pauseRequested: false,
+        holdKind: 'interrupted',
+        holdSince: now(),
         resumeStageKind: lastRun?.stageKind ?? null,
-        errorMessage: 'アプリの停止・再起動により中断されました。自動では再実行しません。内容を確認して「開始」でやり直してください（中断した工程から続けることもできます）。',
+        errorMessage: 'アプリの停止・再起動により中断されました。自動では再実行しません。中断した工程から続けるか、最初からやり直すかを選んでください。',
       });
       this.repo.addActivity({ jobId: job.id, runId: null, employeeId: null, actor: 'system', kind: 'error', message: '再起動により中断（自動再実行はしません）', detail: '' });
     }
-    for (const job of this.repo.listJobsByStatus('queued')) {
-      this.repo.updateJob(job.id, { status: 'paused', statusNote: '再起動のため保留中。「再開」で実行待ちに戻ります。' });
-      this.repo.addActivity({ jobId: job.id, runId: null, employeeId: null, actor: 'system', kind: 'status', message: '再起動のため実行待ちを保留に変更', detail: '' });
+    const queued = this.repo.listJobsByStatus('queued');
+    if (queued.length > 0 && this.repo.queueRunning()) {
+      this.repo.setQueueRunning(false);
+      for (const job of queued) {
+        this.repo.addActivity({ jobId: job.id, runId: null, employeeId: null, actor: 'system', kind: 'status', message: '再起動のため待ち行列を停止しました（順番はそのまま。CEOが待ち行列を開始すると実行されます）', detail: '' });
+      }
     }
   }
 
@@ -74,6 +80,10 @@ export class JobRunner {
     return this.active.size;
   }
 
+  activeJobIds(): number[] {
+    return [...this.active.keys()];
+  }
+
   /** 実行中の案件を中止する。結果の記録は process() 側で行う。 */
   cancel(jobId: number): boolean {
     const c = this.active.get(jobId);
@@ -82,8 +92,25 @@ export class JobRunner {
     return true;
   }
 
+  /** 実行中の工程を止め、その工程の前で保留にする（キャンセルとは違い、案件は続きから再開できる）。 */
+  halt(jobId: number): boolean {
+    const c = this.active.get(jobId);
+    if (!c) return false;
+    c.abort('halt');
+    return true;
+  }
+
   kick(): void {
-    if (this.stopped) return;
+    try {
+      this.kickUnsafe();
+    } catch (e) {
+      // DB が閉じられた後（異常終了・テスト）に残った呼び出しは何もしない
+      if ((e as { code?: string }).code !== 'ERR_INVALID_STATE') throw e;
+    }
+  }
+
+  private kickUnsafe(): void {
+    if (this.stopped || !this.repo.queueRunning()) return;
     while (this.active.size < this.config.maxConcurrentRuns) {
       const next = this.repo.listJobsByStatus('queued').find((j) => !this.active.has(j.id));
       if (!next) return;
@@ -91,8 +118,12 @@ export class JobRunner {
       this.active.set(next.id, controller);
       void this.process(next.id, controller)
         .catch((e: unknown) => {
-          this.repo.updateJob(next.id, { status: 'error', errorMessage: redact(`内部エラー: ${e instanceof Error ? e.message : String(e)}`) });
-          this.log(next.id, null, null, 'system', 'error', '内部エラーにより停止');
+          try {
+            this.repo.updateJob(next.id, { status: 'error', holdKind: 'failed', holdSince: now(), errorMessage: redact(`内部エラー: ${e instanceof Error ? e.message : String(e)}`) });
+            this.log(next.id, null, null, 'system', 'error', '内部エラーにより停止');
+          } catch {
+            // DB が閉じられている（異常終了）。記録は次回起動時の復旧で「中断」になる
+          }
         })
         .finally(() => {
           this.active.delete(next.id);
@@ -102,10 +133,10 @@ export class JobRunner {
     }
   }
 
-  /** テスト・終了処理用: 実行中と実行待ちがなくなるまで待つ。 */
+  /** テスト・終了処理用: 実行中と（待ち行列が動いている場合の）実行待ちがなくなるまで待つ。 */
   async waitForIdle(timeoutMs = 60000): Promise<void> {
     const until = Date.now() + timeoutMs;
-    while (this.active.size > 0 || this.repo.listJobsByStatus('queued').length > 0) {
+    while (this.active.size > 0 || (this.repo.queueRunning() && this.repo.listJobsByStatus('queued').length > 0)) {
       if (Date.now() > until) throw new Error('waitForIdle timeout');
       await new Promise((r) => setTimeout(r, 20));
     }
@@ -120,8 +151,77 @@ export class JobRunner {
   }
 
   private log(jobId: number, runId: number | null, employeeId: string | null, actor: 'ai' | 'system', kind: Parameters<Repo['addActivity']>[0]['kind'], message: string, detail = '') {
-    this.repo.addActivity({ jobId, runId, employeeId, actor, kind, message: redact(message), detail: redact(detail) });
+    try {
+      this.repo.addActivity({ jobId, runId, employeeId, actor, kind, message: redact(message), detail: redact(detail) });
+    } catch (e) {
+      // DB が閉じられた後に届いた出力（異常終了時）は記録できない。次回起動時の復旧で「中断」として扱われる
+      if ((e as { code?: string }).code === 'ERR_INVALID_STATE') return;
+      throw e;
+    }
     this.bus.changed(jobId);
+  }
+
+  /** 開始時に固定した会社の記憶の版から会社情報を組み立てる（実行中に会社情報が変わっても入力は変えない）。 */
+  private frozenCompany(job: Job) {
+    const base = this.repo.getCompany();
+    if (job.memoryRefs.length === 0) return base;
+    const items = job.memoryRefs.map((r) => this.repo.memoryVersion(r)).filter((x) => x != null);
+    return {
+      ...base,
+      facts: items.filter((x) => x.kind === 'policy').map((x) => x.text),
+      hypotheses: items.filter((x) => x.kind === 'hypothesis').map((x) => x.text),
+      unknowns: items.filter((x) => x.kind === 'undecided').map((x) => x.text),
+    };
+  }
+
+  /** 一時停止（保留）にして、受信箱に理由が出るようにする。 */
+  private hold(job: Job, kind: HoldKind, stageIndex: number, note: string) {
+    this.repo.updateJob(job.id, {
+      status: 'paused',
+      pauseRequested: false,
+      holdKind: kind,
+      holdSince: now(),
+      currentStageIndex: stageIndex,
+      currentStepIndex: 0,
+      statusNote: note,
+    });
+  }
+
+  /** 上限の確認（AIを呼ぶ前にプログラムで判定する）。問題がなければ null、あれば理由。 */
+  private limitReason(job: Job, adapter: ExecutionAdapter, settings: Settings, stage: Stage): string | null {
+    const label = `「${stageLabel(stage.kind)}」を開始しませんでした`;
+    if (this.repo.countRunsInAttempt(job.id, job.attempt) >= settings.maxStageRunsPerAttempt) {
+      return `1回の実行で起動できる工程数の上限（${settings.maxStageRunsPerAttempt}）に達したため、${label}`;
+    }
+    if (this.repo.attemptElapsedSec(job.id, job.attempt) >= settings.maxJobTimeSec) {
+      return `1回の実行で工程に使える時間の上限（${settings.maxJobTimeSec}秒）に達したため、${label}`;
+    }
+    if (adapter.isDemo) return null;
+    if (this.repo.countRunsStartedToday(adapter.id) >= settings.maxRunsPerDay) {
+      return `本日の実接続の実行回数上限（${settings.maxRunsPerDay}工程）に達したため、${label}`;
+    }
+    const day = this.repo.realCostBetween(...periodRange('day'));
+    if (day.knownUsd >= settings.maxDailyBudgetUsd) {
+      return `本日の費用上限（${settings.maxDailyBudgetUsd} USD、報告された推定値の合計 ${day.knownUsd.toFixed(4)} USD）に達したため、${label}`;
+    }
+    const month = this.repo.realCostBetween(...periodRange('month'));
+    if (month.knownUsd >= settings.maxMonthlyBudgetUsd) {
+      return `今月の費用上限（${settings.maxMonthlyBudgetUsd} USD、報告された推定値の合計 ${month.knownUsd.toFixed(4)} USD）に達したため、${label}`;
+    }
+    const spent = this.repo.jobRealCost(job.id);
+    if (settings.maxJobBudgetUsd - spent.knownUsd < 0.05) {
+      return `案件の費用上限（${settings.maxJobBudgetUsd} USD、報告された推定値の合計 ${spent.knownUsd.toFixed(4)} USD）に達したため、${label}`;
+    }
+    return null;
+  }
+
+  /** この工程で使ってよい費用（工程・案件・日・月の残りのうち最小）。 */
+  private stageBudget(job: Job, settings: Settings): number {
+    const day = this.repo.realCostBetween(...periodRange('day')).knownUsd;
+    const month = this.repo.realCostBetween(...periodRange('month')).knownUsd;
+    const jobSpent = this.repo.jobRealCost(job.id).knownUsd;
+    const remaining = Math.min(settings.maxBudgetUsd, settings.maxJobBudgetUsd - jobSpent, settings.maxDailyBudgetUsd - day, settings.maxMonthlyBudgetUsd - month);
+    return Math.max(0.05, Math.floor(remaining * 100) / 100);
   }
 
   private async process(jobId: number, controller: AbortController): Promise<void> {
@@ -131,17 +231,29 @@ export class JobRunner {
     const stages = stagesOf(job, employees);
     const adapter = this.adapters[job.adapter];
     const settings = this.repo.getSettings();
-    const company = this.repo.getCompany();
 
     if (!adapter.availability().ok) {
-      this.fail(job, `実行方式「${adapter.label}」が利用できません: ${adapter.availability().detail}`);
+      this.fail(job, `実行方式「${adapter.label}」が利用できません: ${adapter.availability().detail}`, undefined, 'blocked');
       return;
     }
+    // 開始時に固定した資料と会社の記憶の版を使う
+    const materials: { attachment: Attachment; content: Buffer }[] = [];
+    for (const id of job.attachmentIds) {
+      const a = this.repo.getAttachment(id);
+      const p = a ? attachmentPathFor(this.config.dataDir, a) : '';
+      if (!a || !fs.existsSync(p)) {
+        this.fail(job, `資料#${id} の保存ファイルが見つからないため開始できません`, undefined, 'failed');
+        return;
+      }
+      materials.push({ attachment: a, content: fs.readFileSync(p) });
+    }
+    const company = this.frozenCompany(job);
 
     const workspaceDir = workspaceDirFor(this.config.dataDir, job.id);
-    prepareWorkspace(workspaceDir, job, stages, employees, company);
-    job = this.repo.updateJob(job.id, { status: 'running', statusNote: '', startedAt: job.startedAt ?? now() });
-    this.log(job.id, null, null, 'system', 'status', `作業を開始（${adapter.label}、${job.attempt}回目）`);
+    prepareWorkspace(workspaceDir, job, stages, employees, company, materials);
+    job = this.repo.updateJob(job.id, { status: 'running', statusNote: '', holdKind: null, holdSince: null, startedAt: job.startedAt ?? now() });
+    this.log(job.id, null, null, 'system', 'status', `作業を開始（${adapter.label}、${job.attempt}回目）`,
+      `資料: ${materials.map((m) => `#${m.attachment.id} ${m.attachment.name}`).join('、') || 'なし'}／会社の記憶: ${job.memoryRefs.map((r) => `#${r.id}v${r.version}`).join(' ') || 'なし'}`);
     const executeIndex = stages.findIndex((s) => s.kind === 'execute');
 
     let i = job.currentStageIndex;
@@ -152,25 +264,18 @@ export class JobRunner {
         this.fail(job, `工程「${stageLabel(stage.kind)}」の担当社員（${stage.employeeId}）が見つかりません`, stage.kind);
         return;
       }
-      // ---- 上限の確認（AIを呼ぶ前にプログラムで判定する） ----
-      if (!adapter.isDemo && this.repo.countRunsStartedToday(adapter.id) >= settings.maxRunsPerDay) {
-        this.fail(job, `本日の実接続の実行回数上限（${settings.maxRunsPerDay}工程）に達したため、「${stageLabel(stage.kind)}」を開始しませんでした`, stage.kind);
+      // 待ち行列が停止中なら、新しい工程を始めずに待ち行列へ戻す（順番はそのまま）
+      if (!this.repo.queueRunning()) {
+        this.repo.updateJob(job.id, { status: 'queued', currentStageIndex: i, currentStepIndex: i === job.currentStageIndex ? job.currentStepIndex : 0, statusNote: `待ち行列の停止中（「${stageLabel(stage.kind)}」の前で待機）` });
+        this.log(job.id, null, null, 'system', 'status', `待ち行列が停止中のため、「${stageLabel(stage.kind)}」を始めずに待機します`);
         return;
       }
-      if (this.repo.countRunsInAttempt(job.id, job.attempt) >= settings.maxStageRunsPerAttempt) {
-        this.fail(job, `1回の実行で起動できる工程数の上限（${settings.maxStageRunsPerAttempt}）に達したため、「${stageLabel(stage.kind)}」を開始しませんでした`, stage.kind);
+      const limit = this.limitReason(job, adapter, settings, stage);
+      if (limit) {
+        this.fail(job, limit, stage.kind, 'limit');
         return;
       }
-      let budgetUsd = settings.maxBudgetUsd;
-      if (!adapter.isDemo) {
-        const spent = this.repo.jobRealCost(job.id);
-        const remaining = Math.floor((settings.maxJobBudgetUsd - spent.knownUsd) * 100) / 100;
-        if (remaining < 0.05) {
-          this.fail(job, `案件の費用上限（${settings.maxJobBudgetUsd} USD、報告済みの合計 ${spent.knownUsd.toFixed(4)} USD）に達したため、「${stageLabel(stage.kind)}」を開始しませんでした`, stage.kind);
-          return;
-        }
-        budgetUsd = Math.min(budgetUsd, remaining);
-      }
+      const budgetUsd = adapter.isDemo ? settings.maxBudgetUsd : this.stageBudget(job, settings);
 
       const resumeStep = i === job.currentStageIndex ? job.currentStepIndex : 0;
       // 成果物作成を最初から始めるたびに新しい版にする（過去の版の承認は引き継がない）
@@ -182,7 +287,7 @@ export class JobRunner {
         stage.kind === 'execute' && job.reviewRounds > 0 && fs.existsSync(path.join(workspaceDir, `inputs/review_feedback_r${job.revision - 1}.md`))
           ? `inputs/review_feedback_r${job.revision - 1}.md`
           : null;
-      const io = stageIO(workspaceDir, stage.kind, employee.refs, { reviewFeedback });
+      const io = stageIO(workspaceDir, stage.kind, employee.refs, { reviewFeedback, materials: materials.map((m) => m.attachment) });
       const run = this.repo.createRun({
         jobId: job.id,
         attempt: job.attempt,
@@ -192,13 +297,14 @@ export class JobRunner {
         employeeId: employee.id,
         adapter: adapter.id,
         inputs: io.inputs.map((f) => f.path),
+        memoryRefs: job.memoryRefs,
       });
       const versionNote = stage.kind === 'execute' || stage.kind === 'review' ? `（第${job.revision}版）` : '';
       this.log(job.id, run.id, employee.id, 'system', 'status', `${employee.name}が「${stageLabel(stage.kind)}」${versionNote}を開始${resumeStep > 0 ? `（手順${resumeStep + 1}から再開）` : ''}`, `入力: ${io.inputs.map((f) => f.path).join(', ') || 'なし'}`);
 
       const before = outputMtimes(workspaceDir);
       let result: StageResult;
-      const needsWeb = stage.kind === 'research' && !adapter.isDemo;
+      const needsWeb = stage.kind === 'research' && job.researchWeb && !adapter.isDemo;
       if (needsWeb && !employee.tools.includes('WebSearch')) {
         // 接続がないことが分かっている場合はAIを呼ばずに保留する（調べたふりをさせない）
         result = emptyResult('blocked', {
@@ -208,6 +314,7 @@ export class JobRunner {
       } else {
         result = await this.runAdapterStage(adapter, controller, settings, {
           job, stage, stages, employee, attempt: job.attempt, revision: job.revision, io, today: now().slice(0, 10), company, budgetUsd,
+          instructions: job.stageInstructions[stage.kind] ?? '',
           workspaceDir, resumeStep, settings,
           emit: (ev) => this.log(job!.id, run.id, employee.id, 'ai', ev.kind, ev.message, ev.detail ?? ''),
           pauseRequested: () => this.repo.getJob(jobId)?.pauseRequested ?? false,
@@ -229,8 +336,10 @@ export class JobRunner {
       }
       if (result.status === 'succeeded' && needsWeb) result = this.checkWeb(result);
 
-      const shutdown = controller.signal.reason === 'shutdown';
-      const runStatus: RunStatus = result.status === 'cancelled' && shutdown ? 'interrupted' : result.status;
+      const reason = controller.signal.reason;
+      const shutdown = reason === 'shutdown';
+      const halted = reason === 'halt';
+      const runStatus: RunStatus = result.status === 'cancelled' && shutdown ? 'interrupted' : result.status === 'cancelled' && halted ? 'paused' : result.status;
       const registered = this.registerDeliverables(job, run.id, employee.id, stage.kind, workspaceDir, adapter.isDemo);
       this.repo.finishRun(run.id, {
         status: runStatus,
@@ -238,11 +347,12 @@ export class JobRunner {
         costNote: result.costNote,
         numTurns: result.numTurns,
         summary: redact(result.summary),
-        error: redact(result.error),
+        error: redact(halted && result.status === 'cancelled' ? 'CEOの指示で実行中の工程を止めました（案件は保留）' : result.error),
         model: result.model,
         usage: result.usage,
         outputs: registered,
         verdict: stage.kind === 'review' ? result.verdict : 'none',
+        sources: result.sources,
       });
       if (result.summary) this.log(job.id, run.id, employee.id, 'ai', 'result', result.summary);
       for (const ev of result.evidence) this.log(job.id, run.id, employee.id, 'ai', 'evidence', ev);
@@ -253,6 +363,16 @@ export class JobRunner {
       if (result.status === 'succeeded') {
         const verdictNote = stage.kind === 'review' ? `（判定: ${VERDICT_LABEL[result.verdict]}）` : '';
         this.log(job.id, run.id, employee.id, 'system', 'status', `${employee.name}が「${stageLabel(stage.kind)}」${versionNote}を完了${verdictNote}`);
+
+        // 作業計画が提案した工程ごとの指示を案件に記録する（CEO が計画の確認で修正できる）
+        if (stage.kind === 'plan' && result.stageInstructions) {
+          const merged = { ...job.stageInstructions };
+          for (const [k, v] of Object.entries(result.stageInstructions) as [StageKind, string][]) {
+            if (!v || k === 'plan') continue;
+            merged[k] = merged[k] && !merged[k]!.includes(v) ? `${merged[k]}\n（作業計画より）${v}` : merged[k] || v;
+          }
+          job = this.repo.updateJob(job.id, { stageInstructions: merged });
+        }
 
         // レビュー不合格: 上限回数までは指摘ファイルを作って成果物作成からやり直す（AIは呼ばずにプログラムで受け渡す）
         if (stage.kind === 'review' && result.verdict === 'fail' && executeIndex >= 0 && job.reviewRounds < settings.maxAutoRework) {
@@ -266,17 +386,24 @@ export class JobRunner {
           i = executeIndex;
           continue;
         }
-        // 人間に戻す条件（blocker）に該当: 次の工程へ進まずCEOの判断を待つ
+        // 人間に戻す条件（blocker）: 質問として受信箱に送り、回答後は同じ工程を回答つきでやり直す
         const blockers = result.items.filter((it) => it.severity === 'blocker');
-        if (stage.kind !== 'review' && hasNext && blockers.length > 0) {
-          this.repo.updateJob(job.id, {
-            status: 'paused',
-            pauseRequested: false,
-            currentStageIndex: i + 1,
-            currentStepIndex: 0,
-            statusNote: `CEOの判断が必要なため「${stageLabel(stages[i + 1].kind)}」の前で停止中: ${truncate(blockers.map((b) => b.text).join(' / '), 300)}`,
-          });
-          this.log(job.id, run.id, employee.id, 'system', 'status', `人間に戻す条件に該当したため停止しました（${blockers.length}件）。回答を添えて「再開」できます。`);
+        if (stage.kind !== 'review' && blockers.length > 0) {
+          for (const b of blockers) this.repo.addQuestion({ jobId: job.id, runId: run.id, stageKind: stage.kind, employeeId: employee.id, text: b.text });
+          this.hold(job, 'question', i, `${employee.name}からの質問への回答待ち（${blockers.length}件）。回答後、「${stageLabel(stage.kind)}」を回答つきでやり直します`);
+          this.log(job.id, run.id, employee.id, 'system', 'status', `人間に戻す条件に該当したため、CEOの受信箱に質問を送りました（${blockers.length}件）`);
+          return;
+        }
+        // 作業計画の確認: CEO が計画と工程ごとの指示を確認・修正して承認するまで次へ進まない
+        if (stage.kind === 'plan' && job.reviewPlan && hasNext) {
+          this.hold(job, 'plan_review', i + 1, '作業計画の確認待ち（CEOが確認・修正して承認すると次の工程に進みます）');
+          this.log(job.id, run.id, employee.id, 'system', 'status', '作業計画をCEOの受信箱に送りました（承認待ち）');
+          return;
+        }
+        // 費用を取得できなかった場合、上限を判定できないため次の工程の前で止める
+        if (!adapter.isDemo && result.costUsd == null && result.costNote !== NOT_CALLED_NOTE && hasNext) {
+          this.hold(job, 'unknown_cost', i + 1, `「${stageLabel(stage.kind)}」の費用を取得できなかったため、費用上限を判定できません。続ける場合は「再開」してください`);
+          this.log(job.id, run.id, employee.id, 'system', 'status', '費用が未取得のため、次の工程の前で停止しました');
           return;
         }
         if (hasNext && job.pauseRequested) {
@@ -287,30 +414,32 @@ export class JobRunner {
         continue;
       }
       if (result.status === 'blocked') {
-        this.repo.updateJob(job.id, {
-          status: 'paused',
-          pauseRequested: false,
-          currentStageIndex: i,
-          currentStepIndex: 0,
-          statusNote: `「${stageLabel(stage.kind)}」を保留中: ${truncate(redact(result.error), 400)}`,
-        });
+        this.hold(job, 'blocked', i, `「${stageLabel(stage.kind)}」を保留中: ${truncate(redact(result.error), 400)}`);
         this.log(job.id, run.id, employee.id, 'system', 'error', `「${stageLabel(stage.kind)}」を保留しました（完了扱いにしていません）: ${result.error}`);
         return;
       }
       if (result.status === 'paused') {
-        this.repo.updateJob(job.id, { status: 'paused', pauseRequested: false, statusNote: `「${stageLabel(stage.kind)}」の途中で一時停止中` });
+        this.repo.updateJob(job.id, { status: 'paused', pauseRequested: false, holdKind: 'manual', holdSince: now(), statusNote: `「${stageLabel(stage.kind)}」の途中で一時停止中` });
         this.log(job.id, run.id, employee.id, 'system', 'status', '一時停止しました（手順の区切り）');
         return;
       }
+      if (result.status === 'cancelled' && halted) {
+        this.hold(job, 'manual', i, `CEOの指示で「${stageLabel(stage.kind)}」を途中で止めました。「再開」するとこの工程をやり直します`);
+        this.log(job.id, run.id, employee.id, 'system', 'status', `実行中の「${stageLabel(stage.kind)}」を止め、案件を保留にしました`);
+        return;
+      }
       if (result.status === 'cancelled' && !shutdown) {
-        this.repo.updateJob(job.id, { status: 'cancelled', pauseRequested: false, finishedAt: now(), statusNote: '' });
+        this.repo.updateJob(job.id, { status: 'cancelled', pauseRequested: false, holdKind: null, finishedAt: now(), statusNote: '' });
         this.supersedePendingApprovals(job.id);
         this.log(job.id, run.id, employee.id, 'system', 'status', '実行中の作業をキャンセルしました');
         return;
       }
       const label = result.status === 'timeout' ? 'タイムアウト' : shutdown ? '中断' : 'エラー';
       const message = shutdown ? 'アプリの停止により中断されました。自動では再実行しません。' : result.error || '原因不明のエラー';
-      this.repo.updateJob(job.id, { status: 'error', pauseRequested: false, errorMessage: `［${label}］${redact(message)}`, resumeStageKind: stage.kind });
+      this.repo.updateJob(job.id, {
+        status: 'error', pauseRequested: false, holdKind: shutdown ? 'interrupted' : 'failed', holdSince: now(),
+        errorMessage: `［${label}］${redact(message)}`, resumeStageKind: stage.kind,
+      });
       this.log(job.id, run.id, employee.id, 'system', 'error', `「${stageLabel(stage.kind)}」が${label}で終了: ${message}`);
       return;
     }
@@ -370,6 +499,8 @@ export class JobRunner {
     this.repo.updateJob(job.id, {
       status: 'paused',
       pauseRequested: false,
+      holdKind: 'manual',
+      holdSince: now(),
       currentStageIndex: stageIndex,
       currentStepIndex: 0,
       statusNote: `「${stageLabel(stages[stageIndex].kind)}」の前で一時停止中`,
@@ -377,8 +508,10 @@ export class JobRunner {
     this.log(job.id, null, null, 'system', 'status', message);
   }
 
-  private fail(job: Job, message: string, stageKind?: StageKind) {
-    this.repo.updateJob(job.id, { status: 'error', errorMessage: message, pauseRequested: false, ...(stageKind ? { resumeStageKind: stageKind } : {}) });
+  private fail(job: Job, message: string, stageKind?: StageKind, holdKind: HoldKind = 'failed') {
+    this.repo.updateJob(job.id, {
+      status: 'error', errorMessage: message, pauseRequested: false, holdKind, holdSince: now(), ...(stageKind ? { resumeStageKind: stageKind } : {}),
+    });
     this.log(job.id, null, null, 'system', 'error', message);
   }
 
@@ -480,7 +613,7 @@ export class JobRunner {
       summary,
       items,
     });
-    this.repo.updateJob(job.id, { status: 'awaiting_review', statusNote: '', pauseRequested: false });
+    this.repo.updateJob(job.id, { status: 'awaiting_review', statusNote: '', pauseRequested: false, holdKind: null, holdSince: null });
     this.log(job.id, null, job.assigneeId, 'system', 'status', `全工程が完了し、CEOの確認待ちになりました（第${job.revision}版、ファイル${manifest.length}件、レビュー: ${VERDICT_LABEL[reviewVerdict]}、確認事項${items.length}件）`);
   }
 }
@@ -501,4 +634,11 @@ function reviewFeedbackMarkdown(revision: number, r: StageResult): string {
     ...(r.items.length > 0 ? r.items.map((i) => `- [${i.severity}] ${i.text}`) : ['- （個別の指摘なし。review.md を参照）']),
     '',
   ].join('\n');
+}
+
+/** 現地時刻での今日・今月の範囲（ISO 文字列）。費用上限の集計に使う。 */
+export function periodRange(kind: 'day' | 'month', at = new Date()): [string, string] {
+  const start = kind === 'day' ? new Date(at.getFullYear(), at.getMonth(), at.getDate()) : new Date(at.getFullYear(), at.getMonth(), 1);
+  const end = kind === 'day' ? new Date(start.getFullYear(), start.getMonth(), start.getDate() + 1) : new Date(start.getFullYear(), start.getMonth() + 1, 1);
+  return [start.toISOString(), end.toISOString()];
 }
