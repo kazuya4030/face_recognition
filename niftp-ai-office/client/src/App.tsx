@@ -9,15 +9,24 @@ import { ApprovalsPage } from './pages/ApprovalsPage.tsx';
 import { LibraryPage } from './pages/LibraryPage.tsx';
 import { SettingsPage } from './pages/SettingsPage.tsx';
 import { JobDetailPage } from './pages/JobDetailPage.tsx';
+import { InboxPage } from './pages/InboxPage.tsx';
+import { QueuePage } from './pages/QueuePage.tsx';
+import { MemoryPage } from './pages/MemoryPage.tsx';
+import { StatusPage } from './pages/StatusPage.tsx';
 
 const NAV = [
   { key: 'office', label: 'オフィス' },
+  { key: 'inbox', label: '受信箱' },
   { key: 'request', label: '仕事の依頼' },
+  { key: 'queue', label: '待ち行列' },
   { key: 'board', label: '案件ボード' },
-  { key: 'approvals', label: '承認' },
+  { key: 'status', label: '業務状況' },
+  { key: 'memory', label: '会社の記憶' },
   { key: 'library', label: '資料・成果物' },
   { key: 'settings', label: '設定' },
 ];
+/** ナビゲーションには出さないが開ける画面（承認の一覧はオフィスのパネルなどからリンクされる）。 */
+const HIDDEN_PAGES = ['jobs', 'approvals'];
 
 /** 開閉できる小さなポップオーバー。外側をクリックすると閉じる。 */
 function Popover({ className, label, children, align = 'left' }: { className: string; label: ReactNode; children: ReactNode; align?: 'left' | 'right' }) {
@@ -68,7 +77,7 @@ function MobileMenu({ page, pending, snapshot }: { page: string; pending: number
             {NAV.map((n) => (
               <a key={n.key} href={`#/${n.key}`} role="menuitem" className={page === n.key ? 'active' : ''} onClick={() => setOpen(false)}>
                 {n.label}
-                {n.key === 'approvals' && pending > 0 && <span className="count">{pending}</span>}
+                {n.key === 'inbox' && pending > 0 && <span className="count">{pending}</span>}
               </a>
             ))}
           </nav>
@@ -88,7 +97,7 @@ export function App() {
     return <div className="loading">{error ? `サーバーに接続できません: ${error}` : '読み込み中…'}</div>;
   }
 
-  const pendingApprovals = snapshot.approvals.filter((a) => a.status === 'pending').length;
+  const pendingApprovals = snapshot.inboxCount;
 
   return (
     <div className="app">
@@ -102,7 +111,7 @@ export function App() {
           {NAV.map((n) => (
             <a key={n.key} href={`#/${n.key}`} className={page === n.key || (page === 'jobs' && n.key === 'board') ? 'active' : ''}>
               {n.label}
-              {n.key === 'approvals' && pendingApprovals > 0 && <span className="count">{pendingApprovals}</span>}
+              {n.key === 'inbox' && pendingApprovals > 0 && <span className="count">{pendingApprovals}</span>}
             </a>
           ))}
         </nav>
@@ -111,8 +120,8 @@ export function App() {
             <CompanyInfo snapshot={snapshot} />
           </Popover>
           {pendingApprovals > 0 && (
-            <a className="pending-pill" href="#/approvals" aria-label={`承認待ち ${pendingApprovals}件`}>
-              <span aria-hidden>!</span> 承認 {pendingApprovals}
+            <a className="pending-pill" href="#/inbox" aria-label={`受信箱 ${pendingApprovals}件`}>
+              <span aria-hidden>!</span> 受信箱 {pendingApprovals}
             </a>
           )}
           <MobileMenu page={page} pending={pendingApprovals} snapshot={snapshot} />
@@ -127,7 +136,11 @@ export function App() {
         {page === 'approvals' && <ApprovalsPage snapshot={snapshot} navigate={navigate} focusId={route[1] ? Number(route[1]) : undefined} />}
         {page === 'library' && <LibraryPage snapshot={snapshot} navigate={navigate} initialId={route[1] ? Number(route[1]) : undefined} />}
         {page === 'settings' && <SettingsPage snapshot={snapshot} />}
-        {!NAV.some((n) => n.key === page) && page !== 'jobs' && <p>ページが見つかりません。</p>}
+        {page === 'inbox' && <InboxPage snapshot={snapshot} />}
+        {page === 'queue' && <QueuePage />}
+        {page === 'memory' && <MemoryPage navigate={navigate} />}
+        {page === 'status' && <StatusPage snapshot={snapshot} />}
+        {!NAV.some((n) => n.key === page) && !HIDDEN_PAGES.includes(page) && <p>ページが見つかりません。</p>}
       </main>
     </div>
   );

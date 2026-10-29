@@ -4,6 +4,15 @@ import { Badge, DemoBadge, Empty, JobActions } from '../components.tsx';
 import { useChangeSignal } from '../hooks.ts';
 import { ACTIVITY_KIND, JOB_STATUS, RUN_STATUS, VERDICT, formatBytes, formatCost, formatDuration, formatJobCost, formatTime, formatTokens } from '../labels.ts';
 import { ApprovalCard, DECISION, useDeliverables } from './ApprovalsPage.tsx';
+import { JobMaterials } from './materials.tsx';
+
+const SOURCE_METHOD: Record<string, { label: string; tone: string }> = {
+  fetched: { label: '本文確認', tone: 'done' },
+  search_snippet: { label: '検索結果のみ', tone: 'review' },
+  fetch_failed: { label: '取得失敗', tone: 'error' },
+};
+const FAILURE: Record<string, string> = { environment: '実行環境のネットワーク設定', site: 'サイト側の制限', unknown: '原因不明' };
+const STAGE_NAME: Record<string, string> = { plan: '作業計画', research: '調査', execute: '成果物作成', review: 'レビュー' };
 
 type Props = { jobId: number; snapshot: Snapshot; navigate: (p: string) => void };
 
@@ -26,7 +35,8 @@ export function JobDetailPage({ jobId, snapshot, navigate }: Props) {
 
   if (error) return <p className="inline-error">{error}</p>;
   if (!detail) return <p className="muted">読み込み中…</p>;
-  const { job, runs, activities, approvals } = detail;
+  const { job, runs, activities, approvals, attachments, questions, notes, memoryUsed } = detail;
+  const sources = runs.filter((r) => r.stageKind === 'research' && r.sources.length > 0).at(-1)?.sources ?? [];
   const nameOf = (id: string | null) => (id ? (snapshot.employees.find((e) => e.id === id)?.name ?? id) : '');
   const st = JOB_STATUS[job.status];
   const canChooseAdapter = job.status === 'draft' || job.status === 'error';
@@ -67,6 +77,11 @@ export function JobDetailPage({ jobId, snapshot, navigate }: Props) {
         </div>
         {job.pauseRequested && <p className="note">一時停止を要求しています。現在の区切りが終わると停止します。</p>}
         {job.statusNote && <p className="note">{job.statusNote}</p>}
+        {(job.holdKind === 'question' || job.holdKind === 'plan_review') && job.status === 'paused' && (
+          <p className="note">
+            CEOの対応待ちです。<a href="#/inbox">受信箱で{job.holdKind === 'question' ? '質問に回答' : '作業計画を確認'}する</a>
+          </p>
+        )}
         {job.status === 'error' && <p className="error-text">{job.errorMessage}</p>}
         <div className="stage-progress large">
           {job.stages.map((s) => {
@@ -144,6 +159,99 @@ export function JobDetailPage({ jobId, snapshot, navigate }: Props) {
           )}
         </section>
       </div>
+
+      <JobMaterials jobId={job.id} adapter={job.adapter} attachments={attachments} editable={job.status === 'draft' || job.status === 'error'} onChange={reload} />
+
+      {Object.values(job.stageInstructions).some(Boolean) && (
+        <section className="panel">
+          <h2>工程ごとの指示（この案件だけ）</h2>
+          <dl className="kv">
+            {Object.entries(job.stageInstructions)
+              .filter(([, v]) => v)
+              .map(([k, v]) => (
+                <div key={k} className="contents">
+                  <dt>{STAGE_NAME[k] ?? k}</dt>
+                  <dd className="pre-wrap">{v}</dd>
+                </div>
+              ))}
+          </dl>
+        </section>
+      )}
+
+      {(questions.length > 0 || notes.length > 0) && (
+        <section className="panel">
+          <h2>質問・CEOの指摘（この案件だけに使われます）</h2>
+          {questions.length > 0 && (
+            <ul className="plain">
+              {questions.map((q) => (
+                <li key={q.id}>
+                  <Badge tone={q.answer ? 'done' : 'review'}>{q.answer ? '回答済み' : '回答待ち'}</Badge> 質問#{q.id}（{STAGE_NAME[q.stageKind]}・{nameOf(q.employeeId)}・{formatTime(q.createdAt)}）: {q.text}
+                  {q.answer && <div className="muted small">回答（{formatTime(q.answeredAt)}）: {q.answer}</div>}
+                </li>
+              ))}
+            </ul>
+          )}
+          {notes.length > 0 && (
+            <ul className="plain">
+              {notes.map((n) => (
+                <li key={n.id} className="small">
+                  指摘#{n.id}・第{n.revision}版・{formatTime(n.createdAt)}: {n.text} {n.promotedItemId != null && <span className="muted">（会社の記憶#{n.promotedItemId}に登録済み）</span>}
+                </li>
+              ))}
+            </ul>
+          )}
+          <p className="muted small">
+            会社共通の方針にする場合は、<a href="#/memory">会社の記憶</a>で「会社共通の方針に登録」を選んでください。
+          </p>
+        </section>
+      )}
+
+      {sources.length > 0 && (
+        <section className="panel" data-testid="sources">
+          <h2>調査の出典（{sources.length}件）</h2>
+          <p className="muted small">確認方法は、実際のページ取得の結果とプログラムで照合しています。URL が開けたことと、主張の裏付けが取れたことは別です。「検索結果のみ」は本文を確認していません。</p>
+          <table className="table">
+            <thead>
+              <tr>
+                <th>出典</th>
+                <th>確認方法</th>
+                <th>支える主張</th>
+                <th>確認日時</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sources.map((src, i) => (
+                <tr key={i}>
+                  <td className="small">
+                    {src.title || '（題名なし）'}
+                    <div className="muted">{src.url}</div>
+                  </td>
+                  <td>
+                    <Badge tone={SOURCE_METHOD[src.method].tone}>{SOURCE_METHOD[src.method].label}</Badge>
+                    {src.failure && <div className="small muted">原因: {FAILURE[src.failure]}</div>}
+                    {src.note && <div className="small inline-error">{src.note}</div>}
+                  </td>
+                  <td className="small">{src.supports}</td>
+                  <td className="small">{src.retrievedAt}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      {memoryUsed.length > 0 && (
+        <details className="panel">
+          <summary>この案件で使った会社の記憶（開始時の版、{memoryUsed.length}件）</summary>
+          <ul className="plain small">
+            {memoryUsed.map((m) => (
+              <li key={`${m.id}-${m.version}`}>
+                記憶#{m.id} 第{m.version}版: {m.text}
+              </li>
+            ))}
+          </ul>
+        </details>
+      )}
 
       {pending && (
         <section className="panel">

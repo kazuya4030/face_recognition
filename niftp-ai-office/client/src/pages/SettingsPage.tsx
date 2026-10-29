@@ -135,6 +135,9 @@ const NUMBER_FIELDS = [
   { key: 'maxJobBudgetUsd', label: '1案件あたりの費用上限 USD（報告された推定値の合計）', step: 0.5 },
   { key: 'maxStageRunsPerAttempt', label: '1回の実行で起動する工程数の上限（自動修正を含む）', step: 1 },
   { key: 'maxAutoRework', label: 'レビュー不合格時の自動修正の回数（0で自動修正しない）', step: 1 },
+  { key: 'maxDailyBudgetUsd', label: '1日の費用上限 USD（報告された推定値の合計）', step: 1 },
+  { key: 'maxMonthlyBudgetUsd', label: '1か月の費用上限 USD（報告された推定値の合計）', step: 5 },
+  { key: 'maxJobTimeSec', label: '1回の実行で工程に使える時間の合計 秒', step: 60 },
   { key: 'demoTimeoutSec', label: 'デモ実行の制限時間 秒', step: 1 },
 ] as const;
 
@@ -201,33 +204,27 @@ function ExecutionSettings({ snapshot }: { snapshot: Snapshot }) {
   );
 }
 
-const toLines = (xs: string[]) => xs.join('\n');
-
-/** 会社情報。確定事項・仮説・未決定（未確認）を分けて保存し、AI社員の作業ディレクトリに渡す。 */
+/** 会社の基本情報（名前・CEO・法人の状態）。方針・仮説・未決事項は「会社の記憶」で版つきで管理する。 */
 function CompanyEditor({ snapshot }: { snapshot: Snapshot }) {
   const c = snapshot.company;
-  const initial = { name: c.name, ceo: c.ceo, status: c.status, facts: toLines(c.facts), hypotheses: toLines(c.hypotheses), unknowns: toLines(c.unknowns) };
+  const initial = { name: c.name, ceo: c.ceo, status: c.status };
   const [form, setForm] = useState(initial);
   const [msg, setMsg] = useState('');
   const dirty = JSON.stringify(form) !== JSON.stringify(initial);
   const save = async () => {
     try {
       await api.updateCompany(form);
-      setMsg('保存しました（次の実行から反映）');
+      setMsg('保存しました（次に開始する案件から反映）');
     } catch (e) {
       setMsg((e as Error).message);
     }
   };
-  const area = (key: 'facts' | 'hypotheses' | 'unknowns', label: string, hint: string) => (
-    <label>
-      {label}
-      <textarea rows={key === 'facts' ? 6 : 3} value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} placeholder={hint} />
-    </label>
-  );
   return (
     <section className="panel" id="company">
       <h2>会社情報</h2>
-      <p className="muted small">1行に1項目。AI社員には「確定事項」だけを事実として渡し、仮説は検証対象、未決定・未確認は推測で埋めないよう指示します。ここにない実績・顧客・売上は作らせません。</p>
+      <p className="muted small">
+        確定した方針・検証中の仮説・未決事項は <a href="#/memory">会社の記憶</a> で編集します（版つきで記録され、案件の開始時に固定されます）。
+      </p>
       <div className="form">
         <div className="row">
           <label>
@@ -243,15 +240,11 @@ function CompanyEditor({ snapshot }: { snapshot: Snapshot }) {
           法人の状態
           <input value={form.status} maxLength={200} onChange={(e) => setForm({ ...form, status: e.target.value })} />
         </label>
-        {area('facts', '確定事項', '例: 方針：…')}
-        {area('hypotheses', '仮説（検証が必要）', '例: 中小企業の◯◯業務に需要がある')}
-        {area('unknowns', '未決定・未確認', '例: 実際の売上')}
         <div className="form-actions">
           <button type="button" className="btn primary" disabled={!dirty} onClick={save}>
             保存
           </button>
           {msg && <span className="muted">{msg}</span>}
-          {c.updatedAt && <span className="muted small">最終更新 {new Date(c.updatedAt).toLocaleString('ja-JP')}</span>}
         </div>
       </div>
     </section>
@@ -287,7 +280,7 @@ export function SettingsPage({ snapshot }: { snapshot: Snapshot }) {
   return (
     <div className="page narrow">
       <h1>設定</h1>
-      <CompanyEditor key={snapshot.company.updatedAt} snapshot={snapshot} />
+      <CompanyEditor key={`${snapshot.company.name}-${snapshot.company.ceo}-${snapshot.company.status}`} snapshot={snapshot} />
       <ExecutionSettings snapshot={snapshot} />
       <DisplaySettings />
       <h2>AI社員</h2>

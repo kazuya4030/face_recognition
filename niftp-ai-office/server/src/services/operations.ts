@@ -6,7 +6,7 @@ import { STAGE_LABEL, stagesOf } from '../domain/jobState.ts';
 import type { HoldKind, Job, MemoryKind, StageKind } from '../domain/types.ts';
 import type { ChangeBus } from '../events.ts';
 import { createBackup, listBackups } from '../ops/backup.ts';
-import { periodRange, type JobRunner } from '../runner/jobRunner.ts';
+import { periodRange, VERDICT_LABEL, type JobRunner } from '../runner/jobRunner.ts';
 import { snapshotPathFor } from '../runner/workspace.ts';
 import { now, type Repo } from '../store/repo.ts';
 import { UserError } from './errors.ts';
@@ -117,7 +117,7 @@ export class OperationsService {
       const job = this.repo.getJob(a.jobId)!;
       items.push({
         key: `approval:${a.id}`, kind: 'approval', jobId: job.id, jobTitle: job.title, adapter: job.adapter, employeeId: a.requestedBy,
-        employeeName: this.nameOf(a.requestedBy), reason: `第${a.revision}版の成果物ができました（レビュー判定: ${a.reviewVerdict}）`,
+        employeeName: this.nameOf(a.requestedBy), reason: `第${a.revision}版の成果物ができました（レビュー判定: ${VERDICT_LABEL[a.reviewVerdict]}）`,
         decision: '成果物と根拠・未確認事項を確認し、この版を承認するか、コメント付きで差し戻してください。', at: a.createdAt, approvalId: a.id,
         materials: [
           ...this.jobMaterials(job),
@@ -201,10 +201,7 @@ export class OperationsService {
   queue() {
     const employees = this.repo.listEmployees();
     const active = this.runner.activeJobIds();
-    const sum = (j: Job) => {
-      const s = this.office.jobSummary(j, employees);
-      return { id: j.id, title: j.title, adapter: j.adapter, status: j.status, statusNote: j.statusNote, currentStageLabel: s.currentStageLabel, stages: s.stages, holdKind: j.holdKind, actions: s.actions };
-    };
+    const sum = (j: Job) => this.office.jobSummary(j, employees);
     const jobs = this.repo.listJobs();
     return {
       running: this.repo.queueRunning(),

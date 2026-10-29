@@ -79,6 +79,9 @@ export interface EmployeeView extends Employee {
 }
 
 export class OfficeService {
+  /** 受信箱の件数（運用サービスが設定する）。 */
+  inboxCount: () => number = () => 0;
+
   constructor(
     private readonly repo: Repo,
     private readonly runner: JobRunner,
@@ -219,6 +222,7 @@ export class OfficeService {
       approvals: approvals.map((a) => ({ ...this.approvalView(a), jobTitle: jobs.find((j) => j.id === a.jobId)?.title ?? '', jobAdapter: jobs.find((j) => j.id === a.jobId)?.adapter ?? 'demo' })),
       settings: this.repo.getSettings(),
       queueRunning: this.repo.queueRunning(),
+      inboxCount: this.inboxCount(),
       adapters: this.adapterInfo(),
       runner: { active: this.runner.activeCount(), maxConcurrent: 1 },
     };

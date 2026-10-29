@@ -157,6 +157,7 @@ input[type='color'] { padding: 0; width: 3rem; height: 2.2rem; }
 fieldset { border: 1px solid var(--line); border-radius: 10px; padding: 0.6rem 0.9rem; display: flex; flex-direction: column; gap: 0.35rem; }
 legend { font-weight: 700; padding: 0 0.3rem; }
 .req { font-size: 0.68rem; color: var(--ink); border: 1px solid var(--ink); border-radius: 4px; padding: 0 0.3rem; font-weight: 600; }
+.form label > .req { align-self: flex-start; }
 .form-actions { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
 .job-actions { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
 .action-reasons { font-size: 0.82rem; color: var(--muted); width: 100%; }
@@ -476,3 +477,16 @@ legend { font-weight: 700; padding: 0 0.3rem; }
 .run-io summary { cursor: pointer; white-space: nowrap; }
 .run-io .kv dd { white-space: pre-wrap; word-break: break-all; }
 .company-info a { display: inline-block; margin-top: 6px; }
+
+/* ---- 継続運用（受信箱・待ち行列・会社の記憶・業務状況・資料） ---- */
+.contents { display: contents; }
+.inbox-item { border-left: 4px solid var(--st-review); }
+.inbox-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-bottom: 0.5rem; }
+.queue-state-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; }
+.queue-list { list-style: none; padding: 0; margin: 0; }
+.queue-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.5rem 0; border-bottom: 1px solid var(--line); }
+.queue-pos { font-weight: 800; min-width: 1.6em; text-align: center; }
+.memory-list li, .note-list li { padding: 0.45rem 0; border-bottom: 1px solid var(--line); }
+.material-link { display: inline-block; margin-right: 0.4rem; }
+.approved-picker { max-height: 260px; overflow: auto; }
+.nav a { padding-left: 0.5rem; padding-right: 0.5rem; }

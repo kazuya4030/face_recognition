@@ -47,6 +47,7 @@ export async function createApp(config: AppConfig, opts: { logger?: boolean } = 
   const materials = new MaterialsService(repo, config.dataDir, bus);
   const appVersion = JSON.parse(fs.readFileSync(path.join(projectRoot, 'package.json'), 'utf8')).version as string;
   const ops = new OperationsService(repo, runner, office, materials, { dataDir: config.dataDir, backupDir: config.backupDir }, bus, appVersion);
+  office.inboxCount = () => ops.inbox().length;
 
   // forceCloseConnections: 画面の変更通知（SSE）は接続し続けるため、終了時に強制的に閉じないと停止できない。
   const server = Fastify({ logger: opts.logger ? { level: 'info' } : false, bodyLimit: 256 * 1024, forceCloseConnections: true });

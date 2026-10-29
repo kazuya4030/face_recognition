@@ -15,6 +15,10 @@ if (args[0] === '--version') {
   console.log('9.9.9 (Fake Claude Code)');
   process.exit(0);
 }
+if (args[0] === 'auth' && args[1] === 'status') {
+  console.log(JSON.stringify({ loggedIn: true, authMethod: 'oauth_token', apiProvider: 'firstParty' }));
+  process.exit(0);
+}
 let stdin = '';
 process.stdin.on('data', (d) => (stdin += d));
 process.stdin.on('end', async () => {

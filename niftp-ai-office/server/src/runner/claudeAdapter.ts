@@ -312,10 +312,30 @@ export class ClaudeCodeAdapter implements ExecutionAdapter {
   refreshAvailability(): Promise<AdapterAvailability> {
     return new Promise((resolve) => {
       execFile(this.bin, ['--version'], { env: buildChildEnv(this.env), timeout: 15000 }, (err, stdout) => {
-        this.status = err
-          ? { ok: false, detail: `Claude Code CLI が見つからないか起動できません（${this.bin}）` }
-          : { ok: true, detail: 'Claude Code CLI を検出しました', version: stdout.trim() };
-        resolve(this.status);
+        if (err) {
+          this.status = { ok: false, detail: `Claude Code CLI が見つからないか起動できません（${this.bin}）` };
+          return resolve(this.status);
+        }
+        const version = stdout.trim();
+        // ログイン状態（claude auth status --json）。方式だけを表示し、資格情報の中身は扱わない
+        execFile(this.bin, ['auth', 'status', '--json'], { env: buildChildEnv(this.env), timeout: 15000 }, (authErr, authOut) => {
+          let auth: { loggedIn?: boolean; authMethod?: string } | null = null;
+          try {
+            auth = authErr ? null : (JSON.parse(authOut) as { loggedIn?: boolean; authMethod?: string });
+          } catch {
+            auth = null;
+          }
+          const method: Record<string, string> = { oauth_token: 'Claude のアカウント（ログイン）', api_key: 'API キー（従量課金）', apiKey: 'API キー（従量課金）' };
+          this.status =
+            auth && auth.loggedIn === false
+              ? { ok: false, detail: 'Claude Code にログインしていません。ターミナルで claude を起動してログインしてください', version }
+              : {
+                  ok: true,
+                  detail: auth?.authMethod ? `Claude Code CLI を検出しました（認証: ${method[auth.authMethod] ?? auth.authMethod}）` : 'Claude Code CLI を検出しました（ログイン方式は未確認）',
+                  version,
+                };
+          resolve(this.status);
+        });
       });
     });
   }
