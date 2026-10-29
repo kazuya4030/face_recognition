@@ -44,7 +44,7 @@ niftp-ai-office/
 
 1. **状態遷移とボタンの可否はサーバーが決める**（`domain/jobState.ts` の `availableActions`）。画面は `actions[].enabled` と `reason` を表示するだけ。未対応の操作を有効なボタンにしない。
 2. **完了したふりをしない**。失敗・タイムアウト・キャンセル・中断は `runs.status` と `jobs.error_message` に記録する。成果物は実在するファイルだけを記録し、保存版（`data/deliverables/`）がなければリンクを出さない。
-3. **再起動時に自動で再実行しない**。`JobRunner.recoverOnStartup` は実行中→エラー（中断）、実行待ち→一時停止にする。
+3. **再起動時に自動で再実行しない**。`JobRunner.recoverOnStartup` は実行中→エラー（中断、`resume_stage_kind` に中断した工程）、実行待ち→一時停止にする。実行はサーバーのプロセス内だけで行われ、PC のスリープ中やサーバー停止中は実行されない（そう説明すること）。
 4. **費用は推測しない**。Claude Code が `total_cost_usd` を返したときだけ記録し、なければ null（画面は「未取得」）。
 5. **AIの内部思考は記録しない**。記録するのはツール操作・結果・根拠・確認事項・権限拒否のみ。
 6. **秘密情報を出さない**。子プロセスの環境変数は `claudeAdapter.ts` の許可リスト方式。ログ・DBに入る文字列は `redact()` を通す。API はブラウザへ環境変数を返さない。
@@ -62,10 +62,18 @@ niftp-ai-office/
 15. 法人設立状況（構想上の名称・法人設立状況は未確認）は会社情報に必ず表示し、設立済みと誤認させない。会社情報は確定事項・仮説・未決定（未確認）を分けて保存し、入力されていない実績・顧客・売上を補わない。
 16. Claude Code CLI の仕様を推測で使わない。フラグを追加・変更するときは `claude --help` と公式ドキュメント（https://code.claude.com/docs/en/headless 、/cli-reference）を確認し、`server/test/fixtures/fake-claude.mjs` とテストを更新する。
 
+17. **工程の段取りと受け渡しはプログラムで行う**。工程の順番は `stagesOf`（作業計画→調査→成果物作成→レビュー）、各工程の入力・出力ファイルは `workspace.ts` の `stageIO`、レビュー不合格時の指摘ファイルは `writeReviewFeedback` が決める。段取りや受け渡しのために AI 呼び出しを増やさない。
+18. **成功の判定は AI の自己申告だけに頼らない**。必須の出力ファイルが工程中に作成・更新されていなければ失敗、担当外のファイル変更は確認事項に残す。調査工程で Web 検索が 1 件も成功しなければ `blocked`（保留）にし、調査済みとして扱わない。
+19. **承認は版ごと**。成果物作成を始めるたびに `jobs.revision` を上げ、確認依頼には確認対象の保存版 ID（`approvals.deliverable_ids`）とレビュー判定を記録する。新しい版ができたら未処理の確認依頼は `superseded`。過去の版の承認・レビューを新しい版に流用しない。修正前の成果物とレビューは保存版として残す。
+20. **同じモデルの別実行を独立した検証として扱わない**（確認依頼に明記する）。自動修正は `maxAutoRework` 回まで、超えたら不合格のまま CEO 確認待ちにする。
+21. 会社情報（`company_profile`）は確定事項・仮説・未決定（未確認）を分けて保存し、AI には `reference/company.md` で渡す。入力されていない実績・顧客・売上・予算を補わない。
+22. 社員の初期の担当指示を変えるときは `seed.ts` の `EMPLOYEE_DEFAULTS_VERSION` を上げる（利用者が編集していない社員だけが起動時に更新される）。DB の列を足すときは `db.ts` の `ADDED_COLUMNS` に追加する（既存 DB に ALTER で追加される）。
+
 ## 拡張の指針
 
 - 並列実行: `AppConfig.maxConcurrentRuns` を上げる。`JobRunner.kick()` は既に複数件を取り出せる形。同一作業ディレクトリへの同時書き込みが起きないこと（案件単位で分離済み）と、1日の上限判定の競合に注意。
 - 新しい実行方式: `ExecutionAdapter` を実装し `app.ts` の `adapters` に追加、`AdapterId` を拡張する。
 - 家具の追加・模様替え: `office/layout.ts` の `FURNITURE` に追加し、新しい種類なら `Furniture.tsx` に描画を足す。`target` を付けるとクリックで機能につながる。
 - 社員の見た目の変更: `office/appearance.ts` の `Appearance` を保存できるようにすれば、描画側は変更不要。
+- 工程の追加: `StageKind` と `STAGE_LABEL`、`stagesOf`、`stageIO`（入力・出力・必須出力）、`claudeAdapter.ts` の `STAGE_TASK` と `outputSchema`、デモの `STEPS`、偽CLI（`server/test/fixtures/fake-claude.mjs`）を合わせて更新する。
 - 社員の追加: 現状は初期4名の編集のみ（席は `EMPLOYEE_SEATS` に5名分、CEO は `CEO_SEAT`）。追加する場合は `employees` への INSERT と、役割（roleKey）による工程割り当て（`stagesOf`）の見直しが必要。
