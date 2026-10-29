@@ -13,11 +13,33 @@ const TOOLS: { id: string; label: string }[] = [
   { id: 'WebFetch', label: 'Webページ取得（読み取り）' },
 ];
 
+const REFS: { id: string; label: string }[] = [
+  { id: 'brief', label: '依頼書' },
+  { id: 'company', label: '会社情報' },
+  { id: 'feedback', label: 'CEOのコメント' },
+  { id: 'plan', label: '作業計画' },
+  { id: 'research', label: '調査結果' },
+  { id: 'deliverables', label: '提出物（レビュー時）' },
+  { id: 'review', label: '前の版へのレビュー（修正時）' },
+];
+
+const editable = (e: EmployeeView) => ({
+  name: e.name,
+  roleTitle: e.roleTitle,
+  description: e.description,
+  instructions: e.instructions,
+  outputFormat: e.outputFormat,
+  escalation: e.escalation,
+  refs: e.refs as string[],
+  color: e.color,
+  tools: e.tools,
+});
+
 function EmployeeEditor({ e }: { e: EmployeeView }) {
-  const [form, setForm] = useState({ name: e.name, roleTitle: e.roleTitle, description: e.description, instructions: e.instructions, color: e.color, tools: e.tools });
+  const [form, setForm] = useState(editable(e));
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
-  const dirty = JSON.stringify(form) !== JSON.stringify({ name: e.name, roleTitle: e.roleTitle, description: e.description, instructions: e.instructions, color: e.color, tools: e.tools });
+  const dirty = JSON.stringify(form) !== JSON.stringify(editable(e));
   const save = async () => {
     setBusy(true);
     try {
@@ -54,9 +76,31 @@ function EmployeeEditor({ e }: { e: EmployeeView }) {
           <input value={form.description} maxLength={400} onChange={(x) => setForm({ ...form, description: x.target.value })} />
         </label>
         <label>
-          作業指示（Claude Code 実行時にシステムプロンプトへ追加されます）
+          担当指示（Claude Code 実行時にシステムプロンプトへ追加されます）
           <textarea rows={5} value={form.instructions} maxLength={4000} onChange={(x) => setForm({ ...form, instructions: x.target.value })} />
         </label>
+        <label>
+          提出形式（どのファイルに、どの順で書くか）
+          <textarea rows={4} value={form.outputFormat} maxLength={2000} onChange={(x) => setForm({ ...form, outputFormat: x.target.value })} />
+        </label>
+        <label>
+          人間に戻す条件（該当すると重大な確認事項として報告し、次の工程の前で停止します）
+          <textarea rows={3} value={form.escalation} maxLength={2000} onChange={(x) => setForm({ ...form, escalation: x.target.value })} />
+        </label>
+        <fieldset>
+          <legend>参照できる情報（入力ファイルとして渡すもの）</legend>
+          {REFS.map((r) => (
+            <label key={r.id} className="check inline">
+              <input
+                type="checkbox"
+                checked={form.refs.includes(r.id)}
+                onChange={(x) => setForm({ ...form, refs: x.target.checked ? [...form.refs, r.id] : form.refs.filter((v) => v !== r.id) })}
+              />
+              {r.label}
+            </label>
+          ))}
+          <p className="muted small">工程の入力として一覧で渡すファイルを決めます。案件の作業ディレクトリ内のファイル自体は読み取れるため、アクセス制限ではありません。</p>
+        </fieldset>
         <fieldset>
           <legend>Claude Code で使えるツール</legend>
           {TOOLS.map((t) => (
@@ -88,6 +132,9 @@ const NUMBER_FIELDS = [
   { key: 'timeoutSec', label: '1工程あたりの制限時間 秒（Claude Code）', step: 30 },
   { key: 'maxRunsPerDay', label: '1日あたりの実接続の工程数の上限', step: 1 },
   { key: 'maxAttemptsPerJob', label: '1案件あたりの実行回数の上限（差し戻し・やり直しを含む）', step: 1 },
+  { key: 'maxJobBudgetUsd', label: '1案件あたりの費用上限 USD（報告された推定値の合計）', step: 0.5 },
+  { key: 'maxStageRunsPerAttempt', label: '1回の実行で起動する工程数の上限（自動修正を含む）', step: 1 },
+  { key: 'maxAutoRework', label: 'レビュー不合格時の自動修正の回数（0で自動修正しない）', step: 1 },
   { key: 'demoTimeoutSec', label: 'デモ実行の制限時間 秒', step: 1 },
 ] as const;
 
@@ -154,6 +201,63 @@ function ExecutionSettings({ snapshot }: { snapshot: Snapshot }) {
   );
 }
 
+const toLines = (xs: string[]) => xs.join('\n');
+
+/** 会社情報。確定事項・仮説・未決定（未確認）を分けて保存し、AI社員の作業ディレクトリに渡す。 */
+function CompanyEditor({ snapshot }: { snapshot: Snapshot }) {
+  const c = snapshot.company;
+  const initial = { name: c.name, ceo: c.ceo, status: c.status, facts: toLines(c.facts), hypotheses: toLines(c.hypotheses), unknowns: toLines(c.unknowns) };
+  const [form, setForm] = useState(initial);
+  const [msg, setMsg] = useState('');
+  const dirty = JSON.stringify(form) !== JSON.stringify(initial);
+  const save = async () => {
+    try {
+      await api.updateCompany(form);
+      setMsg('保存しました（次の実行から反映）');
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+  };
+  const area = (key: 'facts' | 'hypotheses' | 'unknowns', label: string, hint: string) => (
+    <label>
+      {label}
+      <textarea rows={key === 'facts' ? 6 : 3} value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} placeholder={hint} />
+    </label>
+  );
+  return (
+    <section className="panel" id="company">
+      <h2>会社情報</h2>
+      <p className="muted small">1行に1項目。AI社員には「確定事項」だけを事実として渡し、仮説は検証対象、未決定・未確認は推測で埋めないよう指示します。ここにない実績・顧客・売上は作らせません。</p>
+      <div className="form">
+        <div className="row">
+          <label>
+            会社名
+            <input value={form.name} maxLength={60} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+          </label>
+          <label>
+            CEO
+            <input value={form.ceo} maxLength={60} onChange={(e) => setForm({ ...form, ceo: e.target.value })} />
+          </label>
+        </div>
+        <label>
+          法人の状態
+          <input value={form.status} maxLength={200} onChange={(e) => setForm({ ...form, status: e.target.value })} />
+        </label>
+        {area('facts', '確定事項', '例: 方針：…')}
+        {area('hypotheses', '仮説（検証が必要）', '例: 中小企業の◯◯業務に需要がある')}
+        {area('unknowns', '未決定・未確認', '例: 実際の売上')}
+        <div className="form-actions">
+          <button type="button" className="btn primary" disabled={!dirty} onClick={save}>
+            保存
+          </button>
+          {msg && <span className="muted">{msg}</span>}
+          {c.updatedAt && <span className="muted small">最終更新 {new Date(c.updatedAt).toLocaleString('ja-JP')}</span>}
+        </div>
+      </div>
+    </section>
+  );
+}
+
 function DisplaySettings() {
   const { pref, setPref } = useReducedMotion();
   return (
@@ -183,10 +287,11 @@ export function SettingsPage({ snapshot }: { snapshot: Snapshot }) {
   return (
     <div className="page narrow">
       <h1>設定</h1>
+      <CompanyEditor key={snapshot.company.updatedAt} snapshot={snapshot} />
       <ExecutionSettings snapshot={snapshot} />
       <DisplaySettings />
       <h2>AI社員</h2>
-      <p className="muted">名前・役割・作業指示・使えるツールを変更できます。変更は次の実行から反映されます。</p>
+      <p className="muted">名前・役割・担当指示・提出形式・人間に戻す条件・参照できる情報・使えるツールを変更できます。変更は次の実行から反映されます。</p>
       {snapshot.employees.map((e) => (
         <EmployeeEditor key={`${e.id}-${e.updatedAt}`} e={e} />
       ))}

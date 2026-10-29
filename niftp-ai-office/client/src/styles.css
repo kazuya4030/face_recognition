@@ -469,3 +469,10 @@ legend { font-weight: 700; padding: 0 0.3rem; }
 .pb-count { font-size: 6px; font-weight: 800; fill: #91b36a; }
 .pb-card { font-size: 3.9px; font-weight: 700; fill: #141512; }
 .pb-empty { font-size: 4.6px; font-weight: 700; fill: #f2f0e7; }
+
+/* ---- 実案件の流れ（版・レビュー判定・工程の入出力） ---- */
+.approval-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 6px; }
+.resume-answer { min-width: 220px; flex: 1 1 220px; }
+.run-io summary { cursor: pointer; white-space: nowrap; }
+.run-io .kv dd { white-space: pre-wrap; word-break: break-all; }
+.company-info a { display: inline-block; margin-top: 6px; }

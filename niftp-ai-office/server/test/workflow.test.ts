@@ -36,7 +36,7 @@ describe('デモ実行での一連の流れ', () => {
       ['execute', 'succeeded'],
       ['review', 'succeeded'],
     ]);
-    expect(detail.deliverables.map((d: any) => d.title).sort()).toEqual(['deliverable.md', 'plan.md', 'review.md']);
+    expect(detail.deliverables.map((d: any) => d.title).sort()).toEqual(['deliverables/deliverable.md', 'plan.md', 'report.md', 'review.md']);
     expect(detail.deliverables.every((d: any) => d.exists && d.isDemo)).toBe(true);
     expect(detail.activities.some((a: any) => a.kind === 'action' && a.message.includes('［デモ］'))).toBe(true);
     expect(employee(app, 'researcher').status).toBe('waiting_review');
@@ -187,10 +187,10 @@ describe('再起動', () => {
     await api(app, 'POST', `/api/approvals/${approvalId}/decision`, { decision: 'approve', comment: 'OK' });
 
     // 異常終了を再現: 実行中のまま残った案件と、実行待ちの案件
-    const crashed = app.repo.createJob({ ...JOB_INPUT, usePlanner: false, useReviewer: false, adapter: 'demo', demoScenario: 'normal' });
+    const crashed = app.repo.createJob({ ...JOB_INPUT, usePlanner: false, useResearch: false, useReviewer: false, adapter: 'demo', demoScenario: 'normal' });
     app.repo.updateJob(crashed.id, { status: 'running', attempt: 1 });
-    app.repo.createRun({ jobId: crashed.id, attempt: 1, stageIndex: 0, stageKind: 'execute', employeeId: 'researcher', adapter: 'demo' });
-    const queued = app.repo.createJob({ ...JOB_INPUT, usePlanner: false, useReviewer: false, adapter: 'demo', demoScenario: 'normal' });
+    app.repo.createRun({ jobId: crashed.id, attempt: 1, revision: 1, stageIndex: 0, stageKind: 'execute', employeeId: 'researcher', adapter: 'demo', inputs: [] });
+    const queued = app.repo.createJob({ ...JOB_INPUT, usePlanner: false, useResearch: false, useReviewer: false, adapter: 'demo', demoScenario: 'normal' });
     app.repo.updateJob(queued.id, { status: 'queued' });
     app.repo.db.close(); // サーバーの終了処理を経由せずに閉じる（クラッシュ相当）
     app = null;
@@ -201,7 +201,7 @@ describe('再起動', () => {
     const doneDetail = (await api(app, 'GET', `/api/jobs/${done}`)).body;
     expect(doneDetail.job.status).toBe('completed');
     expect(doneDetail.approvals[0]).toMatchObject({ status: 'approved', ceoComment: 'OK' });
-    expect(doneDetail.deliverables.length).toBe(3);
+    expect(doneDetail.deliverables.length).toBe(4);
     expect(doneDetail.deliverables.every((d: any) => d.exists)).toBe(true);
     expect(doneDetail.activities.length).toBeGreaterThan(5);
 

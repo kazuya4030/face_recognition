@@ -56,13 +56,13 @@ async function step(name, fn) {
   }
 }
 
-async function createJob(page, { title, scenario = 'normal', start = true }) {
+async function createJob(page, { title, scenario = 'normal', start = true, assignee = 'researcher' }) {
   await page.goto(`${base}/#/request`);
   await page.getByLabel(/タイトル/).fill(title);
   await page.getByLabel(/^目的/).fill('E2E確認用の目的');
   await page.getByLabel(/^依頼内容/).fill('競合3社の料金を比較してください');
   await page.getByLabel(/^完了条件/).fill('3社の料金表がある\n出典が明記されている');
-  await page.getByLabel(/担当社員/).selectOption('researcher');
+  await page.getByLabel(/担当社員/).selectOption(assignee);
   await page.getByLabel('デモのシナリオ').selectOption(scenario);
   await page.getByRole('button', { name: start ? '登録して開始' : '登録のみ（未着手）' }).click();
   await page.waitForURL(/#\/jobs\/\d+/);
@@ -95,7 +95,7 @@ try {
     await page.locator('[data-testid="brand-logo"]').waitFor({ state: 'attached' });
     // 法人設立状況は会社情報に整理（設立済みと誤認させない表示を維持）
     await page.locator('.company-pop summary').click();
-    await page.locator('.company-pop').getByText('構想上の名称（法人未設立）').waitFor();
+    await page.locator('.company-pop').getByText('構想上の名称（法人設立状況は未確認。設立済みとして扱わない）').waitFor();
     await page.locator('.company-pop summary').click();
     if ((await page.locator('.character.is-working').count()) !== 0) throw new Error('待機中なのに作業中の演出が表示されている');
     await page.screenshot({ path: path.join(shots, '01-office-idle.png') });
@@ -137,7 +137,7 @@ try {
     await page.goto(base);
     // 家具のクリックが実際の機能につながる
     await page.locator('[data-testid="entrance"]').click();
-    await page.locator('[data-testid="entrance-panel"]').getByText('構想上の名称（法人未設立）').waitFor();
+    await page.locator('[data-testid="entrance-panel"]').getByText('構想上の名称（法人設立状況は未確認。設立済みとして扱わない）').waitFor();
     await page.screenshot({ path: path.join(shots, '01b-company-panel.png') });
     await page.locator('[data-testid="entrance-panel"]').getByRole('button', { name: '閉じる' }).click();
     await page.locator('[data-testid="whiteboard"]').click();
@@ -237,7 +237,10 @@ try {
   await step('3. 処理履歴と成果物が案件に記録される', async () => {
     await page.goto(`${base}/#/jobs/${jobId}`);
     await page.locator('.page-head .badge', { hasText: '確認待ち' }).waitFor();
-    await page.locator('.timeline').getByText('［デモ］成果物を outputs/deliverable.md に書き出し').waitFor();
+    await page.locator('.timeline').getByText('［デモ］成果物を outputs/deliverables/deliverable.md に書き出し').waitFor();
+    // 工程ごとの入力ファイル（前の工程の出力を引き継ぐ）
+    await page.locator('details.run-io summary').nth(2).click();
+    await page.locator('details.run-io[open]').getByText(/outputs\/deliverables\/deliverable\.md/).first().waitFor();
     for (const f of ['plan.md', 'deliverable.md', 'review.md']) await page.getByRole('link', { name: f }).first().waitFor();
     await page.screenshot({ path: path.join(shots, '04-job-detail.png'), fullPage: true });
     await page.goto(`${base}/#/library`);
@@ -259,12 +262,16 @@ try {
     await page.locator('.col-todo .card', { hasText: 'E2E 競合料金調査' }).waitFor();
   });
 
-  await step('4b. 再実行して承認する → 完了、承認記録が残る', async () => {
+  await step('4b. 差し戻しを反映した第2版を作り、その版を承認する → 完了、承認した版が記録に残る', async () => {
     await page.goto(`${base}/#/jobs/${jobId}`);
     await page.getByText('出典URLを各数値の横に追加してください').first().waitFor();
-    await page.getByRole('button', { name: '開始' }).click();
+    await page.getByRole('button', { name: '続きから開始（成果物作成から）' }).click();
     await page.locator('.page-head .badge', { hasText: '確認待ち' }).waitFor({ timeout: 25000 });
     const card = page.locator('.approval-card');
+    await card.getByText('第2版', { exact: true }).waitFor();
+    await card.getByText('レビュー: 合格').waitFor();
+    // 作業計画はやり直さない（第2版は成果物作成とレビューだけ）
+    if ((await page.locator('tr[data-testid^="run-"]').count()) !== 5) throw new Error('差し戻し後の修正で作業計画からやり直している');
     await card.getByLabel(/CEOコメント/).fill('確認しました。承認します');
     await card.getByRole('button', { name: '承認する' }).click();
     await page.locator('.page-head .badge', { hasText: '完了' }).waitFor();
@@ -274,6 +281,8 @@ try {
     await page.goto(`${base}/#/approvals`);
     await page.locator('.table').getByText('確認しました。承認します').waitFor();
     await page.locator('.table').getByText('出典URLを各数値の横に追加してください').waitFor();
+    await page.locator('.table tr', { hasText: '確認しました。承認します' }).getByText(/第2版/).waitFor();
+    await page.locator('.table tr', { hasText: '出典URLを各数値の横に追加してください' }).getByText(/第1版/).waitFor();
     await page.screenshot({ path: path.join(shots, '07-approval-history.png'), fullPage: true });
     await page.goto(base);
     await page.getByRole('button', { name: 'オフィス全体' }).click();
@@ -314,6 +323,45 @@ try {
     void id;
   });
 
+  await step('レビュー不合格は自動で1回修正し、前の版のレビューも残る（調査工程つき）', async () => {
+    await createJob(page, { title: 'E2E 自動修正', scenario: 'rework', assignee: 'builder' });
+    await page.locator('.page-head .badge', { hasText: '確認待ち' }).waitFor({ timeout: 40000 });
+    const runs = page.locator('tr[data-testid^="run-"]');
+    if ((await runs.count()) !== 6) throw new Error(`工程数が想定と違う: ${await runs.count()}`);
+    await runs.nth(1).getByText('調査').waitFor();
+    await runs.nth(3).getByText('不合格', { exact: true }).waitFor();
+    await runs.nth(4).getByText('第2版').waitFor();
+    await runs.nth(5).getByText('合格', { exact: true }).waitFor();
+    await page.locator('.approval-card').getByText('第2版', { exact: true }).waitFor();
+    const reviews = page.locator('.detail-grid .table tr', { hasText: 'review.md' });
+    if ((await reviews.count()) !== 2) throw new Error('第1版のレビューが残っていない');
+    await page.screenshot({ path: path.join(shots, '09b-auto-rework.png'), fullPage: true });
+  });
+
+  await step('会社情報を確定事項・仮説・未確認に分けて編集できる', async () => {
+    await page.goto(`${base}/#/settings`);
+    const company = page.locator('#company');
+    if ((await company.getByLabel('仮説（検証が必要）').inputValue()) !== '') throw new Error('仮説が勝手に補完されている');
+    if (!(await company.getByLabel('未決定・未確認').inputValue()).includes('実際の売上')) throw new Error('未確認事項がない');
+    await company.getByLabel('仮説（検証が必要）').fill('E2E確認用の仮説');
+    await company.getByRole('button', { name: '保存' }).click();
+    await company.getByText('保存しました').waitFor();
+    await page.reload();
+    if ((await page.locator('#company').getByLabel('仮説（検証が必要）').inputValue()) !== 'E2E確認用の仮説') throw new Error('会社情報が保存されていない');
+    await page.locator('.employee-editor').first().locator('summary').click();
+    await page.locator('.employee-editor').first().getByLabel(/提出形式/).waitFor();
+    await page.locator('.employee-editor').first().getByLabel(/人間に戻す条件/).waitFor();
+    await page.screenshot({ path: path.join(shots, '09c-settings-company.png'), fullPage: true });
+  });
+
+  await step('案件ボードでデモ案件と実案件を分けて表示できる', async () => {
+    await page.goto(`${base}/#/board`);
+    await page.getByLabel('案件の種類').selectOption('real');
+    if ((await page.locator('.board .card').count()) !== 0) throw new Error('実案件の表示にデモ案件が混ざる');
+    await page.getByLabel('案件の種類').selectOption('demo');
+    await page.locator('.board .card', { hasText: 'E2E 自動修正' }).waitFor();
+  });
+
   await step('未対応の操作は押せない（未着手の案件では一時停止・再開が無効）', async () => {
     await createJob(page, { title: 'E2E 未着手', start: false });
     if (await page.getByRole('button', { name: '一時停止' }).isEnabled()) throw new Error('未着手で一時停止が押せる');
@@ -330,7 +378,7 @@ try {
     await page.locator('.col-error .card', { hasText: 'E2E キャンセル確認' }).waitFor();
     await page.locator('.col-todo .card', { hasText: 'E2E 未着手' }).waitFor();
     await page.goto(`${base}/#/jobs/${jobId}`);
-    await page.locator('.timeline').getByText('承認: 確認しました。承認します').waitFor();
+    await page.locator('.timeline').getByText(/第2版を承認（ファイル\d+件）: 確認しました。承認します/).waitFor();
     await page.goto(`${base}/#/library`);
     await page.getByRole('button', { name: /deliverable\.md/ }).first().click();
     await page.locator('.file-content', { hasText: '【デモ出力】' }).waitFor();
@@ -370,7 +418,7 @@ try {
     const tag = await page.locator('.name-tag', { hasText: 'ミナ' }).boundingBox();
     if (!tag || tag.height < 11) throw new Error(`名札が小さすぎます（${tag?.height}px）`);
     await page.getByRole('button', { name: 'メニュー' }).click();
-    await page.locator('.menu-sheet').getByText('構想上の名称（法人未設立）').waitFor();
+    await page.locator('.menu-sheet').getByText('構想上の名称（法人設立状況は未確認。設立済みとして扱わない）').waitFor();
     await page.getByRole('button', { name: 'メニュー' }).click();
     await page.screenshot({ path: path.join(shots, '11-mobile.png') });
     // オフィスで社員を選ぶと下からパネルが開き、社員はパネルの上に見える

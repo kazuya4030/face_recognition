@@ -12,8 +12,10 @@ afterEach(async () => {
   app = null;
 });
 
-const probe = (dataDir: string, jobId: number) =>
+/** 偽CLIが記録した起動内容（工程ごとに1件、起動順）。 */
+const probes = (dataDir: string, jobId: number): any[] =>
   JSON.parse(fs.readFileSync(path.join(dataDir, 'workspaces', `job-${jobId}`, '.fake-probe.json'), 'utf8'));
+const probe = (dataDir: string, jobId: number) => probes(dataDir, jobId).at(-1);
 
 describe('Claude Code アダプター（偽CLIで検証）', () => {
   it('安全な引数で起動し、操作・根拠・確認事項・費用・成果物を記録する', async () => {
@@ -44,14 +46,21 @@ describe('Claude Code アダプター（偽CLIで検証）', () => {
     expect(detail.job.cost).toEqual({ kind: 'known', usd: 0.0123 });
 
     const messages = detail.activities.map((a: any) => `${a.kind}:${a.message}`);
-    expect(messages).toContain('action:ファイルを書く: outputs/result.md');
+    expect(messages).toContain('action:ファイルを書く: outputs/deliverables/result.md');
     expect(messages).toContain('evidence:https://example.com/source');
     expect(messages).toContain('question:価格の前提を確認してください');
     expect(messages.some((m: string) => m.startsWith('denied:'))).toBe(true);
     // 内部思考は記録しない
     expect(JSON.stringify(detail.activities)).not.toContain('SECRET THOUGHT');
 
-    expect(detail.deliverables.map((d: any) => [d.title, d.isDemo])).toEqual([['result.md', false]]);
+    expect(detail.deliverables.map((d: any) => [d.title, d.isDemo, d.revision, d.stageKind])).toEqual([
+      ['deliverables/result.md', false, 1, 'execute'],
+      ['report.md', false, 1, 'execute'],
+    ]);
+    expect(run.usage).toMatchObject({ inputTokens: 120, outputTokens: 45, cacheReadTokens: 300 });
+    expect(run.model).toBe('fake-model-a');
+    expect(run.inputs).toContain('brief.md');
+    expect(run.inputs).toContain('reference/company.md');
     const approval = detail.approvals[0];
     expect(approval.items.map((i: any) => i.text)).toContain('価格の前提を確認してください');
   });

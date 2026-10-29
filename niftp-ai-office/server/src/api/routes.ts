@@ -78,6 +78,8 @@ export function registerRoutes(app: FastifyInstance, office: OfficeService, bus:
 
   app.put<{ Body: Record<string, unknown> }>('/api/settings', async (req) => office.updateSettings(req.body ?? {}));
 
+  app.put<{ Body: Record<string, unknown> }>('/api/company', async (req) => office.updateCompany(req.body ?? {}));
+
   app.post('/api/adapters/refresh', async () => {
     await Promise.all(adapters.map((a) => a.refreshAvailability()));
     bus.changed();

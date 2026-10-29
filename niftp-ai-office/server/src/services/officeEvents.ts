@@ -87,7 +87,7 @@ export function deriveOfficeEvents(
             ? { type: 'cancelled', label: '中止' }
             : r.status === 'paused'
               ? null
-              : { type: 'error', label: r.status === 'timeout' ? 'タイムアウト' : r.status === 'interrupted' ? '中断' : 'エラー' };
+              : { type: 'error', label: r.status === 'timeout' ? 'タイムアウト' : r.status === 'interrupted' ? '中断' : r.status === 'blocked' ? '保留' : 'エラー' };
       if (end) {
         events.push({ ...base(r.jobId), key: `run:${r.id}:end`, at: r.finishedAt, employeeId: r.employeeId, stageKind: r.stageKind, ...end });
       }

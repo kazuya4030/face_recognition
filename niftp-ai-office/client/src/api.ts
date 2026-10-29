@@ -34,5 +34,6 @@ export const api = {
   deliverableContent: (id: number) => request<DeliverableContent>('GET', `/api/deliverables/${id}/content`),
   updateEmployee: (id: string, body: Record<string, unknown>) => request('PUT', `/api/employees/${id}`, body),
   updateSettings: (body: Record<string, unknown>) => request('PUT', '/api/settings', body),
+  updateCompany: (body: Record<string, unknown>) => request('PUT', '/api/company', body),
   refreshAdapters: () => request('POST', '/api/adapters/refresh'),
 };

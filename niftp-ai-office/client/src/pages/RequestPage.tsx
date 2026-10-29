@@ -13,6 +13,7 @@ export function RequestPage({ snapshot, navigate }: Props) {
     acceptanceCriteria: '',
     assigneeId: defaultAssignee ?? '',
     usePlanner: true,
+    useResearch: true,
     useReviewer: true,
     adapter: snapshot.settings.defaultAdapter as string,
     demoScenario: 'normal',
@@ -23,6 +24,7 @@ export function RequestPage({ snapshot, navigate }: Props) {
 
   const adapter = snapshot.adapters.find((a) => a.id === form.adapter);
   const manager = snapshot.employees.find((e) => e.roleKey === 'manager');
+  const researcher = snapshot.employees.find((e) => e.roleKey === 'researcher');
   const qa = snapshot.employees.find((e) => e.roleKey === 'qa');
   const required = ['title', 'purpose', 'details', 'acceptanceCriteria', 'assigneeId'] as const;
   const missing = required.filter((k) => !String(form[k]).trim());
@@ -42,9 +44,10 @@ export function RequestPage({ snapshot, navigate }: Props) {
   };
 
   const stagePreview = [
-    form.usePlanner && manager && manager.id !== form.assigneeId ? `${manager.name}（作業分解）` : null,
-    `${snapshot.employees.find((e) => e.id === form.assigneeId)?.name ?? '担当未選択'}（実行）`,
-    form.useReviewer && qa && qa.id !== form.assigneeId ? `${qa.name}（品質確認）` : null,
+    form.usePlanner && manager && manager.id !== form.assigneeId ? `${manager.name}（作業計画）` : null,
+    form.useResearch && researcher && researcher.id !== form.assigneeId ? `${researcher.name}（調査）` : null,
+    `${snapshot.employees.find((e) => e.id === form.assigneeId)?.name ?? '担当未選択'}（成果物作成）`,
+    form.useReviewer && qa && qa.id !== form.assigneeId ? `${qa.name}（レビュー）` : null,
     'CEO（承認・差し戻し）',
   ].filter(Boolean);
 
@@ -83,11 +86,15 @@ export function RequestPage({ snapshot, navigate }: Props) {
           <legend>進め方</legend>
           <label className="check">
             <input type="checkbox" checked={form.usePlanner} disabled={!manager || manager.id === form.assigneeId} onChange={(e) => set('usePlanner', e.target.checked)} />
-            業務責任者AIが先に作業を分解する
+            業務責任者AIが先に作業計画を作る
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={form.useResearch} disabled={!researcher || researcher.id === form.assigneeId} onChange={(e) => set('useResearch', e.target.checked)} />
+            調査・企画AIが調査する（実接続では Web 検索を使います。使えない場合は調査工程を保留します）
           </label>
           <label className="check">
             <input type="checkbox" checked={form.useReviewer} disabled={!qa || qa.id === form.assigneeId} onChange={(e) => set('useReviewer', e.target.checked)} />
-            品質確認AIが成果物を照合する
+            品質確認AIが別の実行でレビューする（不合格なら{snapshot.settings.maxAutoRework}回まで自動で修正）
           </label>
           <p className="muted small">流れ: {stagePreview.join(' → ')}</p>
         </fieldset>
@@ -109,12 +116,13 @@ export function RequestPage({ snapshot, navigate }: Props) {
                 <option value="normal">正常に完了する</option>
                 <option value="error">途中でエラーになる（エラー表示の確認用）</option>
                 <option value="timeout">応答が止まりタイムアウトする（タイムアウト表示の確認用）</option>
+                <option value="rework">第1版がレビューで不合格になる（自動修正の確認用）</option>
               </select>
             </label>
           )}
           {form.adapter === 'claude' && (
             <p className="muted small">
-              上限: 1工程あたり {snapshot.settings.maxTurns}ターン・{snapshot.settings.maxBudgetUsd} USD・{snapshot.settings.timeoutSec}秒。作業は案件専用のディレクトリ内に限定され、外部への送信・公開・削除などは行いません。
+              上限: 1工程あたり {snapshot.settings.maxTurns}ターン・{snapshot.settings.maxBudgetUsd} USD・{snapshot.settings.timeoutSec}秒、1案件 {snapshot.settings.maxJobBudgetUsd} USD・1回の実行 {snapshot.settings.maxStageRunsPerAttempt}工程まで。作業は案件専用のディレクトリ内に限定され、外部への送信・公開・削除などは行いません。
             </p>
           )}
         </fieldset>

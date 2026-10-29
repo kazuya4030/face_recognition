@@ -11,8 +11,8 @@
 import { execFile, spawn } from 'node:child_process';
 import path from 'node:path';
 import readline from 'node:readline';
-import type { ReviewItem } from '../domain/types.ts';
-import { emptyResult, type AdapterAvailability, type ExecutionAdapter, type StageContext, type StageResult } from './adapter.ts';
+import type { ReviewItem, RunUsage, StageKind } from '../domain/types.ts';
+import { emptyResult, type AdapterAvailability, type ExecutionAdapter, type StageContext, type StageResult, type WebStats } from './adapter.ts';
 import { redact, truncate } from './redact.ts';
 
 const ENV_ALLOWLIST = [
@@ -40,64 +40,70 @@ export function buildChildEnv(source: NodeJS.ProcessEnv = process.env): NodeJS.P
   return env;
 }
 
-const OUTPUT_SCHEMA = {
-  type: 'object',
-  properties: {
-    summary: { type: 'string', description: '実施した作業と結果の要約（日本語、300字以内）' },
-    deliverables: { type: 'array', items: { type: 'string' }, description: '作成・更新した outputs/ 配下のファイル' },
-    evidence: { type: 'array', items: { type: 'string' }, description: '根拠として参照したURL・資料・ファイル' },
-    questions: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          text: { type: 'string' },
-          severity: { type: 'string', enum: ['info', 'warning', 'blocker'] },
-        },
-        required: ['text', 'severity'],
-      },
-      description: 'CEOへの確認事項・指摘（不備、未確認事項、判断が必要な点）',
+const QUESTIONS_SCHEMA = {
+  type: 'array',
+  items: {
+    type: 'object',
+    properties: {
+      text: { type: 'string' },
+      severity: { type: 'string', enum: ['info', 'warning', 'blocker'] },
     },
+    required: ['text', 'severity'],
   },
-  required: ['summary', 'deliverables', 'evidence', 'questions'],
+  description: 'CEOへの確認事項・指摘。blocker は「人間に戻す条件」に該当する場合だけ使う',
 };
 
-const STAGE_TASK: Record<StageContext['stage']['kind'], string> = {
-  plan: [
-    '作業ディレクトリの brief.md（依頼書）を読み、依頼を実行可能な作業に分解してください。',
-    '作業計画を outputs/plan.md に書いてください（作業・担当・完了条件・確認方法の表）。',
-    '成果物そのものはまだ作らないでください。',
-  ].join('\n'),
-  execute: [
-    '作業ディレクトリの brief.md（依頼書）と、存在する場合は outputs/plan.md を読んでください。',
-    '完了条件を満たす成果物を outputs/ 配下に作成してください。',
-    'あわせて outputs/report.md に、実施した作業・根拠・未確認事項を書いてください。',
-    'brief.md に差し戻しコメントがある場合は、その指摘に対応してください。',
-  ].join('\n'),
-  review: [
-    '作業ディレクトリの brief.md（依頼書）の目的・完了条件と、outputs/ 配下の成果物を照合してください。',
-    '照合結果を outputs/review.md に書いてください（完了条件ごとに 充足／不足／判断不能 と理由）。',
-    '他の成果物ファイルは変更しないでください。',
-  ].join('\n'),
+/** 最終回答の形式（--json-schema）。工程ごとに必要な項目を足す。 */
+export function outputSchema(kind: StageKind) {
+  const properties: Record<string, unknown> = {
+    summary: { type: 'string', description: '実施した作業と結果の要約（日本語、300字以内）' },
+    deliverables: { type: 'array', items: { type: 'string' }, description: '作成・更新したファイル（作業ディレクトリからの相対パス）' },
+    evidence: { type: 'array', items: { type: 'string' }, description: '根拠として参照したURL・資料・ファイル（実際に参照したものだけ）' },
+    questions: QUESTIONS_SCHEMA,
+  };
+  const required = ['summary', 'deliverables', 'evidence', 'questions'];
+  if (kind === 'research') {
+    properties.webStatus = {
+      type: 'string',
+      enum: ['available', 'search_only', 'unavailable'],
+      description: 'Webの利用状況。available: 検索とページ本文の取得ができた／search_only: 検索結果のみ／unavailable: 検索できなかった',
+    };
+    required.push('webStatus');
+  }
+  if (kind === 'review') {
+    properties.verdict = { type: 'string', enum: ['pass', 'fail'], description: '判定。提出物の欠落・出典と食い違う事実・計算誤り・禁止事項への抵触があれば fail' };
+    required.push('verdict');
+  }
+  return { type: 'object', properties, required };
+}
+
+const STAGE_TASK: Record<StageKind, string> = {
+  plan: '依頼書を読み、提出物ごとに担当工程・必要な入力・完了条件・確認方法を決めた作業計画を作ってください。成果物そのものはまだ作らないでください。',
+  research: '作業計画に沿って調査し、事実（出典付き）と仮説・推測と未確認事項を分けて調査結果にまとめてください。',
+  execute: '作業計画と調査結果を使い、依頼の提出物を作ってください。入力にレビューの指摘やCEOのコメントがある場合は、それに対応した新しい版にしてください。',
+  review: '提出物を、依頼書の条件と調査結果（原資料）に照らして確認し、問題点と判定（合格／不合格）を出してください。提出物は変更しないでください。',
 };
 
-export function buildSystemPrompt(ctx: Pick<StageContext, 'employee'>): string {
+export function buildSystemPrompt(ctx: Pick<StageContext, 'employee' | 'company'>): string {
   return [
-    `あなたは「株式会社NIFTP」（構想上の名称。法人は未設立）のAI社員「${ctx.employee.name}」（役割: ${ctx.employee.roleTitle}）です。`,
+    `あなたは「${ctx.company.name}」（${ctx.company.status}）のAI社員「${ctx.employee.name}」（役割: ${ctx.employee.roleTitle}）です。CEOは${ctx.company.ceo}です。`,
     '共通ルール:',
-    '- 作業は現在の作業ディレクトリの中だけで行う。',
-    '- メール送信・外部公開・支払い・ファイル削除など、外部に影響する操作は行わない。必要な場合は questions に書いてCEOの判断を求める。',
-    '- 確認できない事実や出典を作らない。推測は推測と明記する。',
+    '- 作業は現在の作業ディレクトリの中だけで行う。指定された出力ファイル以外は作成・変更しない。',
+    '- メール送信・外部への連絡・外部公開・契約・支払い・ファイル削除は行わない。必要な場合は questions に書いてCEOの判断を求める。',
+    '- 確認できない事実・出典・会社の実績・顧客・売上を作らない。推測は推測、仮説は仮説と明記する。',
     '- 日本語で書く。',
     '- 最終回答は指定されたJSON形式で、実施した操作・結果・根拠・確認事項を返す。',
     '',
-    '役割ごとの作業指示:',
+    '担当指示:',
     ctx.employee.instructions,
+    ...(ctx.employee.outputFormat ? ['', '提出形式:', ctx.employee.outputFormat] : []),
+    ...(ctx.employee.escalation ? ['', '人間に戻す条件:', ctx.employee.escalation] : []),
   ].join('\n');
 }
 
 export function buildArgs(ctx: StageContext): string[] {
   const tools = ctx.employee.tools.filter((t) => /^[A-Za-z]+$/.test(t));
+  const budget = Math.max(0.05, Math.min(ctx.settings.maxBudgetUsd, ctx.budgetUsd));
   const args = [
     '-p',
     '--output-format', 'stream-json',
@@ -106,12 +112,12 @@ export function buildArgs(ctx: StageContext): string[] {
     '--permission-mode', 'acceptEdits',
     '--permission-prompts', 'none',
     '--max-turns', String(ctx.settings.maxTurns),
-    '--max-budget-usd', String(ctx.settings.maxBudgetUsd),
+    '--max-budget-usd', String(budget),
     '--no-session-persistence',
     '--strict-mcp-config',
     '--disallowedTools', 'mcp__*',
     '--append-system-prompt', buildSystemPrompt(ctx),
-    '--json-schema', JSON.stringify(OUTPUT_SCHEMA),
+    '--json-schema', JSON.stringify(outputSchema(ctx.stage.kind)),
   ];
   // Web の閲覧は読み取りのみ。社員設定でツールに含めた場合だけ事前許可する。
   const web = tools.filter((t) => t === 'WebSearch' || t === 'WebFetch');
@@ -122,8 +128,21 @@ export function buildArgs(ctx: StageContext): string[] {
   return args;
 }
 
+/** 標準入力で渡す指示。入力・出力ファイルの一覧はプログラムが作業ディレクトリの内容から決める。 */
 export function buildStagePrompt(ctx: StageContext): string {
-  return `${STAGE_TASK[ctx.stage.kind]}\n\n（案件番号 #${ctx.job.id}、${ctx.attempt}回目の実行）`;
+  const version = ctx.stage.kind === 'execute' || ctx.stage.kind === 'review' ? `、成果物 第${ctx.revision}版` : '';
+  return [
+    `【工程】${STAGE_TASK[ctx.stage.kind]}`,
+    '',
+    '【入力ファイル】（作業ディレクトリからの相対パス。最初にすべて読むこと）',
+    ...(ctx.io.inputs.length > 0 ? ctx.io.inputs.map((f) => `- ${f.path} … ${f.label}`) : ['- なし']),
+    '',
+    '【出力ファイル】（ここにだけ書くこと）',
+    ...ctx.io.outputs.map((f) => `- ${f.path} … ${f.label}`),
+    '',
+    `【実行日】${ctx.today}（出典の確認日にはこの日付を使う）`,
+    `【案件】#${ctx.job.id}、${ctx.attempt}回目の実行${version}`,
+  ].join('\n');
 }
 
 function summarizeToolInput(name: string, input: Record<string, unknown>, cwd: string): string {
@@ -149,6 +168,28 @@ const TOOL_LABEL: Record<string, string> = {
   Read: 'ファイルを読む', Write: 'ファイルを書く', Edit: 'ファイルを編集', Glob: 'ファイルを検索', Grep: '内容を検索',
   WebSearch: 'Web検索', WebFetch: 'Webページを取得', StructuredOutput: '報告を提出（指定形式）',
 };
+
+interface StreamTrack {
+  model: string;
+  toolNames: Map<string, string>;
+  web: WebStats;
+}
+
+const numOrNull = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+/** result メッセージの usage（トークン数）。項目がなければ null のまま記録する。 */
+export function parseUsage(v: unknown): RunUsage | null {
+  if (!v || typeof v !== 'object') return null;
+  const u = v as Record<string, unknown>;
+  const server = (u.server_tool_use ?? {}) as Record<string, unknown>;
+  return {
+    inputTokens: numOrNull(u.input_tokens),
+    outputTokens: numOrNull(u.output_tokens),
+    cacheReadTokens: numOrNull(u.cache_read_input_tokens),
+    cacheCreationTokens: numOrNull(u.cache_creation_input_tokens),
+    webSearchRequests: numOrNull(server.web_search_requests),
+  };
+}
 
 function parseItems(v: unknown): ReviewItem[] {
   if (!Array.isArray(v)) return [];
@@ -198,6 +239,7 @@ export class ClaudeCodeAdapter implements ExecutionAdapter {
       });
 
       let resultMsg: Record<string, unknown> | null = null;
+      const track: StreamTrack = { model: '', toolNames: new Map(), web: { searches: 0, searchErrors: 0, fetches: 0, fetchErrors: 0, reported: '' } };
       let stderrTail = '';
       let killTimers: NodeJS.Timeout[] = [];
       let spawnError = '';
@@ -232,21 +274,22 @@ export class ClaudeCodeAdapter implements ExecutionAdapter {
         } catch {
           return;
         }
-        this.handleMessage(msg, ctx, (r) => (resultMsg = r));
+        this.handleMessage(msg, ctx, track, (r) => (resultMsg = r));
       });
 
       child.on('close', (code, sig) => {
         ctx.signal.removeEventListener('abort', onAbort);
         killTimers.forEach(clearTimeout);
-        resolve(this.toResult(ctx, resultMsg, code, sig, spawnError, stderrTail));
+        resolve(this.toResult(ctx, resultMsg, track, code, sig, spawnError, stderrTail));
       });
     });
   }
 
-  private handleMessage(msg: Record<string, unknown>, ctx: StageContext, setResult: (r: Record<string, unknown>) => void) {
+  private handleMessage(msg: Record<string, unknown>, ctx: StageContext, track: StreamTrack, setResult: (r: Record<string, unknown>) => void) {
     const type = msg.type;
     const subtype = msg.subtype;
     if (type === 'system' && subtype === 'init') {
+      track.model = typeof msg.model === 'string' ? msg.model : '';
       ctx.emit({ kind: 'system', message: `Claude Code を起動（モデル: ${String(msg.model ?? '不明')}、権限モード: ${String(msg.permissionMode ?? '不明')}）` });
     } else if (type === 'system' && subtype === 'permission_denied') {
       ctx.emit({ kind: 'denied', message: `権限により拒否: ${String(msg.tool_name ?? '')}`, detail: redact(truncate(String(msg.decision_reason ?? ''), 300)) });
@@ -258,11 +301,17 @@ export class ClaudeCodeAdapter implements ExecutionAdapter {
         // 内部思考（thinking）や途中の発話は記録しない。実行した操作と結果だけを残す。
         if (c.type === 'tool_use') {
           const name = String(c.name);
+          track.toolNames.set(String(c.id), name);
+          if (name === 'WebSearch') track.web.searches++;
+          if (name === 'WebFetch') track.web.fetches++;
           const target = summarizeToolInput(name, (c.input ?? {}) as Record<string, unknown>, ctx.workspaceDir);
           ctx.emit({ kind: 'action', message: `${TOOL_LABEL[name] ?? name}${target ? `: ${redact(truncate(target, 200))}` : ''}` });
         } else if (c.type === 'tool_result' && c.is_error) {
+          const toolName = track.toolNames.get(String(c.tool_use_id));
+          if (toolName === 'WebSearch') track.web.searchErrors++;
+          if (toolName === 'WebFetch') track.web.fetchErrors++;
           const text = typeof c.content === 'string' ? c.content : JSON.stringify(c.content);
-          ctx.emit({ kind: 'error', message: 'ツール実行が失敗', detail: redact(truncate(text, 400)) });
+          ctx.emit({ kind: 'error', message: `ツール実行が失敗${toolName ? `（${TOOL_LABEL[toolName] ?? toolName}）` : ''}`, detail: redact(truncate(text, 400)) });
         }
       }
     } else if (type === 'result') {
@@ -273,6 +322,7 @@ export class ClaudeCodeAdapter implements ExecutionAdapter {
   private toResult(
     ctx: StageContext,
     msg: Record<string, unknown> | null,
+    track: StreamTrack,
     code: number | null,
     sig: NodeJS.Signals | null,
     spawnError: string,
@@ -283,6 +333,9 @@ export class ClaudeCodeAdapter implements ExecutionAdapter {
       costUsd: cost,
       costNote: cost == null ? '' : 'Claude Code が報告した推定値（実際の請求額と異なる場合があります）',
       numTurns: typeof msg?.num_turns === 'number' ? (msg.num_turns as number) : null,
+      model: track.model,
+      usage: parseUsage(msg?.usage),
+      web: ctx.employee.tools.some((t) => t === 'WebSearch' || t === 'WebFetch') ? track.web : null,
     };
     if (ctx.signal.aborted) {
       const timeout = ctx.signal.reason === 'timeout';
@@ -310,7 +363,7 @@ export class ClaudeCodeAdapter implements ExecutionAdapter {
     if (msg.is_error || msg.subtype !== 'success') {
       const reason: Record<string, string> = {
         error_max_turns: `ターン数の上限（${ctx.settings.maxTurns}）に達しました`,
-        error_max_budget_usd: `費用上限（${ctx.settings.maxBudgetUsd} USD）に達しました`,
+        error_max_budget_usd: `この工程の費用上限（${Math.min(ctx.settings.maxBudgetUsd, ctx.budgetUsd)} USD）に達しました`,
         error_during_execution: '実行中にエラーが発生しました',
       };
       return emptyResult('failed', {
@@ -324,6 +377,8 @@ export class ClaudeCodeAdapter implements ExecutionAdapter {
     if (!structured) {
       items.push({ text: '指定形式（JSON）の報告が得られなかったため、最終メッセージをそのまま要約として記録しました', severity: 'warning' });
     }
-    return emptyResult('succeeded', { ...base, summary, evidence, items });
+    if (base.web && typeof structured?.webStatus === 'string') base.web.reported = structured.webStatus;
+    const verdict = ctx.stage.kind !== 'review' ? 'none' : structured?.verdict === 'pass' ? 'pass' : structured?.verdict === 'fail' ? 'fail' : 'unknown';
+    return emptyResult('succeeded', { ...base, summary, evidence, items, verdict });
   }
 }

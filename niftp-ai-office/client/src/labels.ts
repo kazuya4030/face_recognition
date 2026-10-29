@@ -29,7 +29,23 @@ export const RUN_STATUS: Record<RunStatus, { label: string; tone: string }> = {
   cancelled: { label: 'キャンセル', tone: 'cancelled' },
   paused: { label: '一時停止', tone: 'paused' },
   interrupted: { label: '中断', tone: 'error' },
+  blocked: { label: '保留', tone: 'paused' },
 };
+
+export const VERDICT: Record<string, { label: string; tone: string }> = {
+  // 記号（✓ × !）はバッジの色区分（tone）側で付く
+  pass: { label: '合格', tone: 'done' },
+  fail: { label: '不合格', tone: 'error' },
+  unknown: { label: '判定不明', tone: 'review' },
+  none: { label: 'レビューなし', tone: 'idle' },
+};
+
+/** トークン数。取得できなかった値は「未取得」。 */
+export function formatTokens(u: { inputTokens: number | null; outputTokens: number | null; cacheReadTokens: number | null } | null): string {
+  if (!u || (u.inputTokens == null && u.outputTokens == null)) return '未取得';
+  const n = (v: number | null) => (v == null ? '未取得' : v.toLocaleString('ja-JP'));
+  return `入力 ${n(u.inputTokens)}・出力 ${n(u.outputTokens)}${u.cacheReadTokens ? `・キャッシュ読込 ${n(u.cacheReadTokens)}` : ''}`;
+}
 
 export const BOARD_COLUMNS: { key: JobSummary['column']; label: string; hint: string }[] = [
   { key: 'todo', label: '未着手', hint: '登録済み・差し戻し' },

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, type JobDetail, type Snapshot } from '../api.ts';
 import { Badge, DemoBadge, Empty, JobActions } from '../components.tsx';
 import { useChangeSignal } from '../hooks.ts';
-import { ACTIVITY_KIND, JOB_STATUS, RUN_STATUS, formatBytes, formatCost, formatDuration, formatJobCost, formatTime } from '../labels.ts';
+import { ACTIVITY_KIND, JOB_STATUS, RUN_STATUS, VERDICT, formatBytes, formatCost, formatDuration, formatJobCost, formatTime, formatTokens } from '../labels.ts';
 import { ApprovalCard, DECISION, useDeliverables } from './ApprovalsPage.tsx';
 
 type Props = { jobId: number; snapshot: Snapshot; navigate: (p: string) => void };
@@ -99,12 +99,14 @@ export function JobDetailPage({ jobId, snapshot, navigate }: Props) {
             <dd>{nameOf(job.assigneeId)}</dd>
             {job.feedback && (
               <>
-                <dt>差し戻しコメント</dt>
+                <dt>CEOからのコメント</dt>
                 <dd className="pre-wrap">{job.feedback}</dd>
               </>
             )}
             <dt>実行回数</dt>
             <dd>{job.attempt}回</dd>
+            <dt>成果物の版</dt>
+            <dd>{job.revision > 0 ? `第${job.revision}版` : 'まだありません'}</dd>
             <dt>費用</dt>
             <dd>{formatJobCost(job.cost)}</dd>
             <dt>登録</dt>
@@ -122,7 +124,7 @@ export function JobDetailPage({ jobId, snapshot, navigate }: Props) {
                 <tr>
                   <th>ファイル</th>
                   <th>作成</th>
-                  <th>回</th>
+                  <th>版</th>
                   <th>サイズ</th>
                 </tr>
               </thead>
@@ -133,7 +135,7 @@ export function JobDetailPage({ jobId, snapshot, navigate }: Props) {
                       {d.exists ? <a href={`#/library/${d.id}`}>{d.title}</a> : <span>{d.title}（ファイルなし）</span>} {d.isDemo && <DemoBadge />}
                     </td>
                     <td>{nameOf(d.employeeId)}</td>
-                    <td>{d.attempt}</td>
+                    <td>{d.stageKind === 'execute' || d.stageKind === 'review' ? `第${d.revision}版` : '資料'}</td>
                     <td>{formatBytes(d.size)}</td>
                   </tr>
                 ))}
@@ -160,6 +162,7 @@ export function JobDetailPage({ jobId, snapshot, navigate }: Props) {
               <tr>
                 <th>回</th>
                 <th>工程</th>
+                <th>版</th>
                 <th>担当</th>
                 <th>方式</th>
                 <th>結果</th>
@@ -167,23 +170,49 @@ export function JobDetailPage({ jobId, snapshot, navigate }: Props) {
                 <th>所要</th>
                 <th>ターン</th>
                 <th>費用</th>
+                <th>入力・出力</th>
               </tr>
             </thead>
             <tbody>
               {runs.map((r) => (
-                <tr key={r.id}>
+                <tr key={r.id} data-testid={`run-${r.id}`}>
                   <td>{r.attempt}</td>
                   <td>{job.stages.find((s) => s.kind === r.stageKind)?.label ?? r.stageKind}</td>
+                  <td>{r.stageKind === 'execute' || r.stageKind === 'review' ? `第${r.revision}版` : '—'}</td>
                   <td>{nameOf(r.employeeId)}</td>
                   <td>{r.adapter === 'demo' ? <DemoBadge /> : 'Claude Code'}</td>
                   <td>
                     <Badge tone={RUN_STATUS[r.status].tone}>{RUN_STATUS[r.status].label}</Badge>
+                    {r.stageKind === 'review' && r.status === 'succeeded' && <Badge tone={VERDICT[r.verdict].tone}>{VERDICT[r.verdict].label}</Badge>}
                     {r.error && <div className="small error-text">{r.error}</div>}
                   </td>
                   <td>{formatTime(r.startedAt)}</td>
                   <td>{formatDuration(r.startedAt, r.finishedAt)}</td>
-                  <td>{r.numTurns ?? (r.adapter === 'demo' ? '—' : '未取得')}</td>
-                  <td title={r.costNote}>{formatCost(r.costUsd, r.adapter)}</td>
+                  <td>{r.numTurns ?? (r.adapter === 'demo' || r.costNote === 'AIを呼び出していません' ? '—' : '未取得')}</td>
+                  <td title={r.costNote}>{r.costNote === 'AIを呼び出していません' ? 'なし（AI未実行）' : formatCost(r.costUsd, r.adapter)}</td>
+                  <td>
+                    <details className="run-io">
+                      <summary>
+                        入力{r.inputs.length}・出力{r.outputs.length}
+                      </summary>
+                      <dl className="kv small">
+                        <dt>入力</dt>
+                        <dd>{r.inputs.length ? r.inputs.join('\n') : 'なし'}</dd>
+                        <dt>出力</dt>
+                        <dd>{r.outputs.length ? r.outputs.join('\n') : 'なし'}</dd>
+                        <dt>終了</dt>
+                        <dd>{formatTime(r.finishedAt)}</dd>
+                        {r.adapter !== 'demo' && (
+                          <>
+                            <dt>モデル</dt>
+                            <dd>{r.model || '未取得'}</dd>
+                            <dt>トークン</dt>
+                            <dd>{formatTokens(r.usage)}</dd>
+                          </>
+                        )}
+                      </dl>
+                    </details>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -219,7 +248,8 @@ export function JobDetailPage({ jobId, snapshot, navigate }: Props) {
           <table className="table">
             <thead>
               <tr>
-                <th>回</th>
+                <th>版</th>
+                <th>レビュー</th>
                 <th>結果</th>
                 <th>判断日時</th>
                 <th>CEOコメント</th>
@@ -228,7 +258,10 @@ export function JobDetailPage({ jobId, snapshot, navigate }: Props) {
             <tbody>
               {approvals.map((a) => (
                 <tr key={a.id}>
-                  <td>{a.attempt}</td>
+                  <td>
+                    第{a.revision}版（{a.files.length}件）
+                  </td>
+                  <td>{VERDICT[a.reviewVerdict] && <Badge tone={VERDICT[a.reviewVerdict].tone}>{VERDICT[a.reviewVerdict].label}</Badge>}</td>
                   <td>
                     <Badge tone={DECISION[a.status].tone}>{DECISION[a.status].label}</Badge>
                   </td>

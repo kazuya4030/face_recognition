@@ -1,5 +1,5 @@
 // 案件の状態遷移ルール。ボタンの有効/無効もここで決め、画面は結果を表示するだけにする。
-import type { BoardColumn, Employee, Job, JobAction, JobStatus, Stage } from './types.ts';
+import type { BoardColumn, Employee, Job, JobAction, JobStatus, Stage, StageKind } from './types.ts';
 
 export const JOB_STATUS_LABEL: Record<JobStatus, string> = {
   draft: '未着手',
@@ -11,6 +11,8 @@ export const JOB_STATUS_LABEL: Record<JobStatus, string> = {
   error: 'エラー',
   cancelled: 'キャンセル済み',
 };
+
+export const STAGE_LABEL: Record<StageKind, string> = { plan: '作業計画', research: '調査', execute: '成果物作成', review: 'レビュー' };
 
 export function boardColumnOf(status: JobStatus): BoardColumn {
   switch (status) {
@@ -31,15 +33,19 @@ export function boardColumnOf(status: JobStatus): BoardColumn {
 }
 
 /**
- * 案件の工程。業務責任者AIの作業分解・担当者の実行・品質確認AIの照合を順番に行う。
- * 役割に該当する社員がいない場合、その工程は省略する。
+ * 案件の工程。業務責任者AIの作業計画 → 調査・企画AIの調査 → 担当者の成果物作成 → 品質確認AIのレビューを順番に行う。
+ * 役割に該当する社員がいない場合や、担当者自身がその役割の場合、その工程は省略する。
  */
-export function stagesOf(job: Pick<Job, 'assigneeId' | 'usePlanner' | 'useReviewer'>, employees: Employee[]): Stage[] {
+export function stagesOf(job: Pick<Job, 'assigneeId' | 'usePlanner' | 'useResearch' | 'useReviewer'>, employees: Employee[]): Stage[] {
   const stages: Omit<Stage, 'index'>[] = [];
   const manager = employees.find((e) => e.roleKey === 'manager');
+  const researcher = employees.find((e) => e.roleKey === 'researcher');
   const qa = employees.find((e) => e.roleKey === 'qa');
   if (job.usePlanner && manager && manager.id !== job.assigneeId) {
     stages.push({ kind: 'plan', employeeId: manager.id });
+  }
+  if (job.useResearch && researcher && researcher.id !== job.assigneeId) {
+    stages.push({ kind: 'research', employeeId: researcher.id });
   }
   stages.push({ kind: 'execute', employeeId: job.assigneeId });
   if (job.useReviewer && qa && qa.id !== job.assigneeId) {
@@ -62,6 +68,17 @@ export interface ActionState {
   reason: string;
 }
 
+/**
+ * 「続きから開始」で始める工程。差し戻し後は成果物作成から、失敗・中断後は失敗した工程から始められる。
+ * それより前の工程の出力（作業計画・調査結果）は作業ディレクトリに残っているものを使う。
+ */
+export function resumeStageIndex(job: Pick<Job, 'status' | 'resumeStageKind'>, stages: Stage[]): number | null {
+  if (job.status !== 'draft' && job.status !== 'error') return null;
+  if (!job.resumeStageKind) return null;
+  const i = stages.findIndex((s) => s.kind === job.resumeStageKind);
+  return i > 0 ? i : null;
+}
+
 export function availableActions(job: Job, ctx: ActionContext): ActionState[] {
   const attemptsLeft = job.attempt < ctx.maxAttemptsPerJob;
   const s = job.status;
@@ -74,7 +91,7 @@ export function availableActions(job: Job, ctx: ActionContext): ActionState[] {
     if (!attemptsLeft) {
       return { action: 'start', enabled: false, reason: `実行回数の上限（${ctx.maxAttemptsPerJob}回）に達しています` };
     }
-    return { action: 'start', enabled: true, reason: s === 'error' ? '最初の工程からやり直します' : '' };
+    return { action: 'start', enabled: true, reason: '' };
   })();
 
   const pause: ActionState = (() => {

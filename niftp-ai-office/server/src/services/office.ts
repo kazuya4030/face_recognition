@@ -1,16 +1,19 @@
 // 業務管理層。CEOの操作（依頼・開始・停止・承認など）と、画面向けの集計を担当する。
 // AI実行の詳細は JobRunner / アダプターに任せ、ここでは状態遷移の正しさだけを保証する。
 import fs from 'node:fs';
-import { availableActions, boardColumnOf, stagesOf, type ActionState } from '../domain/jobState.ts';
+import { availableActions, boardColumnOf, resumeStageIndex, stagesOf, type ActionState } from '../domain/jobState.ts';
 import {
+  NOT_CALLED_NOTE,
   SETTINGS_LIMITS,
   type AdapterId,
   type Approval,
+  type CompanyProfile,
   type DemoScenario,
   type Employee,
   type EmployeeStatus,
   type Job,
   type JobAction,
+  type RefKey,
   type ReviewItem,
   type Settings,
 } from '../domain/types.ts';
@@ -37,7 +40,22 @@ const LIMITS = {
   roleTitle: 40,
   description: 400,
   instructions: 4000,
+  outputFormat: 2000,
+  escalation: 2000,
+  feedback: 12000,
+  companyItem: 300,
+  companyItems: 30,
 };
+
+const REF_KEYS: RefKey[] = ['brief', 'company', 'plan', 'research', 'deliverables', 'review', 'feedback'];
+
+function lines(v: unknown, field: string): string[] {
+  const raw = Array.isArray(v) ? v.map(String) : typeof v === 'string' ? v.split('\n') : [];
+  const out = raw.map((x) => x.trim()).filter(Boolean);
+  if (out.length > LIMITS.companyItems) throw new UserError(`${field}は${LIMITS.companyItems}項目以内にしてください`);
+  for (const x of out) if (x.length > LIMITS.companyItem) throw new UserError(`${field}の各項目は${LIMITS.companyItem}文字以内で入力してください`);
+  return out;
+}
 
 const ALLOWED_TOOLS = ['Read', 'Write', 'Edit', 'Glob', 'Grep', 'WebSearch', 'WebFetch'];
 
@@ -100,12 +118,18 @@ export class OfficeService {
     const stage = stages[job.currentStageIndex];
     const runs = this.repo.listRuns(job.id);
     const costs = runs.map((r) => r.costUsd);
-    const realRuns = runs.filter((r) => r.adapter !== 'demo');
+    // AIを呼ばずに保留した工程は費用の集計に含めない
+    const realRuns = runs.filter((r) => r.adapter !== 'demo' && r.costNote !== NOT_CALLED_NOTE);
     return {
       ...job,
       column: boardColumnOf(job.status),
       stages: stages.map((s) => ({ ...s, label: stageLabel(s.kind), employeeName: employees.find((e) => e.id === s.employeeId)?.name ?? s.employeeId })),
       currentStageLabel: stage ? stageLabel(stage.kind) : '',
+      // 「続きから開始」できる工程（差し戻し後は成果物作成、失敗・中断後は失敗した工程）
+      resumePoint: (() => {
+        const ri = resumeStageIndex(job, stages);
+        return ri == null ? null : { stageKind: stages[ri].kind, label: stageLabel(stages[ri].kind) };
+      })(),
       deliverableCount: this.repo.listDeliverables(job.id).length,
       pendingApprovalId: this.repo.listApprovals(job.id).find((a) => a.status === 'pending')?.id ?? null,
       // 費用: 実接続の実行で1件でも未取得があれば合計は出さない（推測値を実績として見せない）。
@@ -187,10 +211,13 @@ export class OfficeService {
     const approvals = this.repo.listApprovals();
     return {
       version: this.bus.currentVersion(),
-      company: { name: '株式会社NIFTP', note: '構想上の名称（法人未設立）', ceo: '植村和也' },
+      company: (() => {
+        const c = this.repo.getCompany();
+        return { ...c, note: c.status };
+      })(),
       employees: this.employeeViews(),
       jobs,
-      approvals: approvals.map((a) => ({ ...a, jobTitle: jobs.find((j) => j.id === a.jobId)?.title ?? '' })),
+      approvals: approvals.map((a) => ({ ...this.approvalView(a), jobTitle: jobs.find((j) => j.id === a.jobId)?.title ?? '', jobAdapter: jobs.find((j) => j.id === a.jobId)?.adapter ?? 'demo' })),
       settings: this.repo.getSettings(),
       adapters: this.adapterInfo(),
       runner: { active: this.runner.activeCount(), maxConcurrent: 1 },
@@ -211,7 +238,19 @@ export class OfficeService {
       runs: this.repo.listRuns(id),
       activities: this.repo.listActivities(id),
       deliverables: this.deliverablesWithExistence(id),
-      approvals: this.repo.listApprovals(id),
+      approvals: this.repo.listApprovals(id).map((a) => this.approvalView(a)),
+    };
+  }
+
+  /** 確認依頼と、その対象の保存版（どの版のどのファイルを承認・差し戻ししたか）。 */
+  approvalView(a: Approval) {
+    const byId = new Map(this.repo.listDeliverables(a.jobId).map((d) => [d.id, d]));
+    return {
+      ...a,
+      files: a.deliverableIds
+        .map((id) => byId.get(id))
+        .filter((d) => d != null)
+        .map((d) => ({ id: d.id, title: d.title, revision: d.revision, stageKind: d.stageKind, sha256: d.sha256, size: d.size, isDemo: d.isDemo })),
     };
   }
 
@@ -253,7 +292,7 @@ export class OfficeService {
     const adapter = (body.adapter ?? this.repo.getSettings().defaultAdapter) as AdapterId;
     if (!(adapter in this.adapters)) throw new UserError('実行方式が不正です');
     const scenario = (body.demoScenario ?? 'normal') as DemoScenario;
-    if (!['normal', 'error', 'timeout'].includes(scenario)) throw new UserError('デモシナリオが不正です');
+    if (!['normal', 'error', 'timeout', 'rework'].includes(scenario)) throw new UserError('デモシナリオが不正です');
     const job = this.repo.createJob({
       title: text(body.title, 'タイトル', LIMITS.title, true),
       purpose: text(body.purpose, '目的', LIMITS.purpose, true),
@@ -261,6 +300,7 @@ export class OfficeService {
       acceptanceCriteria: text(body.acceptanceCriteria, '完了条件', LIMITS.acceptanceCriteria, true),
       assigneeId,
       usePlanner: body.usePlanner !== false,
+      useResearch: body.useResearch === true,
       useReviewer: body.useReviewer !== false,
       adapter,
       demoScenario: adapter === 'demo' ? scenario : 'normal',
@@ -288,11 +328,16 @@ export class OfficeService {
     if (!state?.enabled) throw new UserError(state?.reason || 'この操作は現在できません', 409);
 
     switch (action) {
-      case 'start':
+      case 'start': {
+        // from: 'continue' は差し戻し後・失敗後に、前の工程の出力（作業計画・調査結果）を引き継いで途中の工程から始める
+        const from = body.from === 'continue' ? 'continue' : 'beginning';
+        const resumeAt = from === 'continue' ? resumeStageIndex(job, stagesOf(job, this.repo.listEmployees())) : 0;
+        if (resumeAt == null) throw new UserError('続きから開始できる工程がありません。最初から開始してください。', 409);
         job = this.repo.updateJob(id, {
           status: 'queued',
           attempt: job.attempt + 1,
-          currentStageIndex: 0,
+          reviewRounds: 0,
+          currentStageIndex: resumeAt,
           currentStepIndex: 0,
           pauseRequested: false,
           errorMessage: '',
@@ -300,8 +345,10 @@ export class OfficeService {
           startedAt: null,
           finishedAt: null,
         });
-        this.ceoLog(id, `開始を指示（${job.attempt}回目、${this.adapters[job.adapter].label}）`);
+        const stagesNow = stagesOf(job, this.repo.listEmployees());
+        this.ceoLog(id, `開始を指示（${job.attempt}回目、${this.adapters[job.adapter].label}、${resumeAt > 0 ? `「${stageLabel(stagesNow[resumeAt].kind)}」から` : '最初の工程から'}）`);
         break;
+      }
       case 'pause':
         if (job.status === 'queued') {
           job = this.repo.updateJob(id, { status: 'paused', statusNote: 'CEOの指示で保留中' });
@@ -311,10 +358,14 @@ export class OfficeService {
           this.ceoLog(id, '一時停止を要求（区切りで停止します）');
         }
         break;
-      case 'resume':
-        job = this.repo.updateJob(id, { status: 'queued', pauseRequested: false, statusNote: '' });
-        this.ceoLog(id, '再開を指示');
+      case 'resume': {
+        // 停止中の確認事項への回答があれば、以降の工程の入力（CEOからのコメント）に加える
+        const answer = text(body.comment, '回答', LIMITS.comment);
+        const feedback = answer ? appendFeedback(job.feedback, `【再開時の回答（${job.statusNote ? truncateNote(job.statusNote) : '一時停止中'}）】\n${answer}`) : job.feedback;
+        job = this.repo.updateJob(id, { status: 'queued', pauseRequested: false, statusNote: '', feedback });
+        this.ceoLog(id, `再開を指示${answer ? `（回答: ${answer}）` : ''}`);
         break;
+      }
       case 'cancel':
         if (this.runner.isActive(id)) {
           this.runner.cancel(id);
@@ -342,12 +393,17 @@ export class OfficeService {
     this.repo.transaction(() => {
       if (decision === 'approve') {
         this.repo.decideApproval(id, 'approved', comment);
-        this.repo.updateJob(job.id, { status: 'completed', finishedAt: now(), statusNote: '' });
-        this.ceoLog(job.id, `承認${comment ? `: ${comment}` : ''}`);
+        this.repo.updateJob(job.id, { status: 'completed', finishedAt: now(), statusNote: `第${approval.revision}版を承認済み` });
+        this.ceoLog(job.id, `第${approval.revision}版を承認（ファイル${approval.deliverableIds.length}件）${comment ? `: ${comment}` : ''}`);
       } else {
         this.repo.decideApproval(id, 'rejected', comment);
-        this.repo.updateJob(job.id, { status: 'draft', feedback: comment, statusNote: '差し戻し済み。内容を確認して再開始してください。' });
-        this.ceoLog(job.id, `差し戻し: ${comment}`);
+        this.repo.updateJob(job.id, {
+          status: 'draft',
+          feedback: appendFeedback(job.feedback, `【第${approval.revision}版への差し戻し】\n${comment}`),
+          resumeStageKind: 'execute',
+          statusNote: `第${approval.revision}版を差し戻し済み。「続きから開始」で成果物作成から修正します（作業計画・調査結果は引き継ぎ）。`,
+        });
+        this.ceoLog(job.id, `第${approval.revision}版を差し戻し: ${comment}`);
       }
     });
     this.bus.changed(job.id);
@@ -361,11 +417,18 @@ export class OfficeService {
     const tools = Array.isArray(body.tools) ? body.tools.map(String) : [];
     const invalid = tools.filter((t) => !ALLOWED_TOOLS.includes(t));
     if (invalid.length) throw new UserError(`許可できないツールです: ${invalid.join(', ')}`);
+    const current = this.repo.getEmployee(id)!;
+    const refs = body.refs == null ? current.refs : Array.isArray(body.refs) ? body.refs.map(String) : [];
+    const badRefs = refs.filter((r) => !REF_KEYS.includes(r as RefKey));
+    if (badRefs.length) throw new UserError(`参照できる情報の指定が不正です: ${badRefs.join(', ')}`);
     this.repo.updateEmployee(id, {
       name: text(body.name, '名前', LIMITS.employeeName, true),
       roleTitle: text(body.roleTitle, '役割', LIMITS.roleTitle, true),
       description: text(body.description, '説明', LIMITS.description),
-      instructions: text(body.instructions, '作業指示', LIMITS.instructions, true),
+      instructions: text(body.instructions, '担当指示', LIMITS.instructions, true),
+      outputFormat: body.outputFormat == null ? current.outputFormat : text(body.outputFormat, '提出形式', LIMITS.outputFormat),
+      escalation: body.escalation == null ? current.escalation : text(body.escalation, '人間に戻す条件', LIMITS.escalation),
+      refs: refs as RefKey[],
       color,
       tools,
     });
@@ -389,11 +452,25 @@ export class OfficeService {
       if (body[key] == null) continue;
       const v = Number(body[key]);
       if (!Number.isFinite(v) || v < min || v > max) throw new UserError(`${key} は ${min}〜${max} の範囲で指定してください`);
-      next[key] = key === 'maxBudgetUsd' ? v : Math.round(v);
+      next[key] = key === 'maxBudgetUsd' || key === 'maxJobBudgetUsd' ? v : Math.round(v);
     }
     this.repo.saveSettings(next);
     this.bus.changed();
     return next;
+  }
+
+  /** 会社情報の更新。確定事項・仮説・未決定（未確認）を分けて保存する。 */
+  updateCompany(body: Record<string, unknown>): CompanyProfile {
+    this.repo.saveCompany({
+      name: text(body.name, '会社名', 60, true),
+      ceo: text(body.ceo, 'CEO', 60, true),
+      status: text(body.status, '法人の状態', 200, true),
+      facts: lines(body.facts, '確定事項'),
+      hypotheses: lines(body.hypotheses, '仮説'),
+      unknowns: lines(body.unknowns, '未決定・未確認'),
+    });
+    this.bus.changed();
+    return this.repo.getCompany();
   }
 
   private ceoLog(jobId: number, message: string) {
@@ -401,3 +478,10 @@ export class OfficeService {
   }
 }
 
+/** CEOのコメントは版ごとに積み重ねる（古いものから切り詰める）。 */
+function appendFeedback(current: string, add: string): string {
+  const joined = current ? `${current}\n\n${add}` : add;
+  return joined.length > LIMITS.feedback ? joined.slice(joined.length - LIMITS.feedback) : joined;
+}
+
+const truncateNote = (s: string) => (s.length > 60 ? `${s.slice(0, 60)}…` : s);

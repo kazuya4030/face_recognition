@@ -5,6 +5,8 @@ import path from 'node:path';
 import { abortOutcome, emptyResult, type AdapterAvailability, type ExecutionAdapter, type StageContext, type StageResult } from './adapter.ts';
 import { OUTPUTS_DIR } from './workspace.ts';
 
+const demoReviewFails = (ctx: StageContext) => ctx.job.demoScenario === 'rework' && ctx.revision === 1;
+
 const DEMO_HEADER =
   '> 【デモ出力】このファイルはデモ実行アダプターが生成した定型テキストです。実際のAIによる調査・制作の結果ではありません。\n\n';
 
@@ -46,15 +48,27 @@ const STEPS: Record<StageContext['stage']['kind'], DemoStep[]> = {
       }),
     },
   ],
+  research: [
+    { message: '作業計画と依頼書を確認' },
+    {
+      message: '調査結果を outputs/research.md に書き出し',
+      file: ({ job, today }) => ({
+        name: 'research.md',
+        body:
+          `# 調査結果（デモ）: ${job.title}\n\n実際のWeb調査は行っていません（確認日 ${today}）。\n\n` +
+          `## 事実\n- （デモのためなし）\n\n## 仮説\n- （デモのためなし）\n\n## 出典一覧\n- （デモのためなし）\n`,
+      }),
+    },
+  ],
   execute: [
-    { message: '依頼書と作業計画を確認' },
+    { message: '入力ファイル（依頼書・作業計画・調査結果）を確認' },
     { message: '成果物の構成を作成' },
     {
-      message: '成果物を outputs/deliverable.md に書き出し',
-      file: ({ job, employee }) => ({
-        name: 'deliverable.md',
+      message: '成果物を outputs/deliverables/deliverable.md に書き出し',
+      file: ({ job, employee, revision }) => ({
+        name: 'deliverables/deliverable.md',
         body:
-          `# ${job.title}（デモ成果物）\n\n作成: ${employee.name}\n\n## 目的\n${job.purpose || '（記載なし）'}\n\n` +
+          `# ${job.title}（デモ成果物 第${revision}版）\n\n作成: ${employee.name}\n\n## 目的\n${job.purpose || '（記載なし）'}\n\n` +
           `## 内容\nこの欄には実接続時に担当AI社員が作成した内容が入ります。デモでは定型文のみを出力しています。\n\n` +
           `## 完了条件への対応\n${(job.acceptanceCriteria || '（記載なし）')
             .split('\n')
@@ -63,18 +77,24 @@ const STEPS: Record<StageContext['stage']['kind'], DemoStep[]> = {
             .join('\n')}\n`,
       }),
     },
-    { message: '作業報告を作成' },
+    {
+      message: '作業報告を outputs/report.md に書き出し',
+      file: ({ revision, io }) => ({
+        name: 'report.md',
+        body: `# 作業報告（デモ 第${revision}版）\n\n参照した入力:\n${io.inputs.map((f) => `- ${f.path}`).join('\n')}\n`,
+      }),
+    },
   ],
   review: [
     { message: '依頼の完了条件を一覧化' },
     { message: '成果物と完了条件を照合' },
     {
       message: '確認結果を outputs/review.md に書き出し',
-      file: ({ job }) => ({
+      file: (ctx) => ({
         name: 'review.md',
         body:
-          `# 品質確認（デモ）: ${job.title}\n\n- 成果物ファイルの存在: 確認済み（outputs/deliverable.md）\n` +
-          `- 内容の妥当性: デモ出力のため判定対象外\n`,
+          `# レビュー（デモ 第${ctx.revision}版）: ${ctx.job.title}\n\n- 判定: ${demoReviewFails(ctx) ? '不合格（自動修正の再現）' : '合格（デモのため内容は判定対象外）'}\n` +
+          `- 成果物ファイルの存在: 確認済み（outputs/deliverables/）\n`,
       }),
     },
   ],
@@ -99,6 +119,7 @@ export class DemoAdapter implements ExecutionAdapter {
   async runStage(ctx: StageContext): Promise<StageResult> {
     const steps = STEPS[ctx.stage.kind];
     const outDir = path.join(ctx.workspaceDir, OUTPUTS_DIR);
+    fs.mkdirSync(path.join(outDir, 'deliverables'), { recursive: true });
     try {
       for (let i = ctx.resumeStep; i < steps.length; i++) {
         if (ctx.pauseRequested() && i > ctx.resumeStep) {
@@ -128,10 +149,17 @@ export class DemoAdapter implements ExecutionAdapter {
     const result = emptyResult('succeeded', { costNote: 'デモ実行のため費用は発生しません' });
     if (ctx.stage.kind === 'plan') {
       result.summary = '［デモ］依頼を3つの作業に分解しました。';
+    } else if (ctx.stage.kind === 'research') {
+      result.summary = '［デモ］調査結果の枠を作成しました。実際のWeb調査は行っていません。';
     } else if (ctx.stage.kind === 'execute') {
       result.summary = '［デモ］定型の成果物を作成しました。実際の調査・制作は行っていません。';
       result.evidence = ['［デモ］根拠の例: brief.md（依頼書）'];
+    } else if (demoReviewFails(ctx)) {
+      result.verdict = 'fail';
+      result.summary = '［デモ］第1版を不合格としました（自動修正の再現シナリオ）。';
+      result.items = [{ text: '［デモ］完了条件への対応が書かれていません（再現用の指摘）', severity: 'warning' }];
     } else {
+      result.verdict = 'pass';
       result.summary = '［デモ］成果物ファイルの存在を確認しました。内容の妥当性は判定していません。';
       result.items = [
         { text: '［デモ］成果物はデモ用の定型文です。実接続で再実行するか判断してください。', severity: 'warning' },

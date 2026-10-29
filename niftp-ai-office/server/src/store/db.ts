@@ -3,7 +3,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -111,13 +111,67 @@ CREATE TABLE IF NOT EXISTS approvals (
 CREATE INDEX IF NOT EXISTS approvals_job ON approvals(job_id);
 
 CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS company_profile (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  data TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 `;
+
+/**
+ * 既存のデータベースに後から追加した列。CREATE TABLE IF NOT EXISTS では既存の表に列が増えないため、
+ * 起動時に不足している列だけを ALTER TABLE で追加する（既存の行は既定値になる）。
+ */
+const ADDED_COLUMNS: Record<string, [string, string][]> = {
+  employees: [
+    ['output_format', "TEXT NOT NULL DEFAULT ''"],
+    ['escalation', "TEXT NOT NULL DEFAULT ''"],
+    ['refs', "TEXT NOT NULL DEFAULT '[]'"],
+    ['defaults_version', 'INTEGER NOT NULL DEFAULT 1'],
+  ],
+  jobs: [
+    ['use_research', 'INTEGER NOT NULL DEFAULT 0'],
+    ['revision', 'INTEGER NOT NULL DEFAULT 0'],
+    ['review_rounds', 'INTEGER NOT NULL DEFAULT 0'],
+    ['resume_stage_kind', 'TEXT'],
+  ],
+  runs: [
+    ['revision', 'INTEGER NOT NULL DEFAULT 0'],
+    ['model', "TEXT NOT NULL DEFAULT ''"],
+    ['usage', 'TEXT'],
+    ['inputs', "TEXT NOT NULL DEFAULT '[]'"],
+    ['outputs', "TEXT NOT NULL DEFAULT '[]'"],
+    ['verdict', "TEXT NOT NULL DEFAULT 'none'"],
+  ],
+  deliverables: [
+    ['revision', 'INTEGER NOT NULL DEFAULT 0'],
+    ['stage_kind', "TEXT NOT NULL DEFAULT ''"],
+  ],
+  approvals: [
+    ['revision', 'INTEGER NOT NULL DEFAULT 0'],
+    ['deliverable_ids', "TEXT NOT NULL DEFAULT '[]'"],
+    ['review_verdict', "TEXT NOT NULL DEFAULT 'none'"],
+  ],
+};
+
+function migrate(db: DatabaseSync): void {
+  for (const [table, columns] of Object.entries(ADDED_COLUMNS)) {
+    const existing = new Set((db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[]).map((c) => c.name));
+    for (const [name, def] of columns) {
+      if (!existing.has(name)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${def}`);
+    }
+  }
+  // 以前の版で作成した成果物は、工程の種類を記録した実行履歴から補う。
+  db.exec(`UPDATE deliverables SET stage_kind = (SELECT stage_kind FROM runs WHERE runs.id = deliverables.run_id) WHERE stage_kind = ''`);
+  db.prepare(`INSERT INTO meta (key, value) VALUES ('schema_version', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(String(SCHEMA_VERSION));
+}
 
 export function openDatabase(dataDir: string): DatabaseSync {
   fs.mkdirSync(dataDir, { recursive: true });
   const db = new DatabaseSync(path.join(dataDir, 'office.sqlite'));
   db.exec('PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 3000;');
   db.exec(SCHEMA);
-  db.prepare('INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)').run('schema_version', String(SCHEMA_VERSION));
+  migrate(db);
   return db;
 }

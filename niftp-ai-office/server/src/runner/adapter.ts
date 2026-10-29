@@ -1,5 +1,6 @@
 // AI実行部分の共通インターフェース。業務管理（JobRunner）はこの型だけを知っていればよい。
-import type { ActivityKind, AdapterId, Employee, Job, ReviewItem, Settings, Stage } from '../domain/types.ts';
+import type { ActivityKind, AdapterId, CompanyProfile, Employee, Job, ReviewItem, ReviewVerdict, RunUsage, Settings, Stage } from '../domain/types.ts';
+import type { StageIO } from './workspace.ts';
 
 export interface StageEvent {
   kind: Extract<ActivityKind, 'action' | 'result' | 'evidence' | 'question' | 'denied' | 'error' | 'system'>;
@@ -13,6 +14,15 @@ export interface StageContext {
   stages: Stage[];
   employee: Employee;
   attempt: number;
+  /** この工程で作る（または確認する）成果物の版。 */
+  revision: number;
+  /** プログラムが決めた入力ファイル・出力ファイル。 */
+  io: StageIO;
+  /** 実行日（UTC、YYYY-MM-DD）。出典の確認日などに使わせる。 */
+  today: string;
+  company: Omit<CompanyProfile, 'updatedAt'>;
+  /** この工程で使ってよい費用の上限（USD）。設定の工程上限と案件の残り予算の小さい方。 */
+  budgetUsd: number;
   /** 案件専用の作業ディレクトリ（AIはここだけを扱う）。 */
   workspaceDir: string;
   /** 一時停止後の再開時、どの手順から始めるか（手順単位の一時停止に対応するアダプターのみ使用）。 */
@@ -28,6 +38,7 @@ export interface StageContext {
 
 export type StageOutcome =
   | 'succeeded'
+  | 'blocked'
   | 'failed'
   | 'timeout'
   | 'cancelled'
@@ -45,6 +56,21 @@ export interface StageResult {
   costUsd: number | null;
   costNote: string;
   numTurns: number | null;
+  model: string;
+  usage: RunUsage | null;
+  /** レビュー工程の判定。他の工程は none。 */
+  verdict: ReviewVerdict;
+  /** Web の利用状況（実接続のみ）。null は計測していないことを表す。 */
+  web: WebStats | null;
+}
+
+export interface WebStats {
+  searches: number;
+  searchErrors: number;
+  fetches: number;
+  fetchErrors: number;
+  /** AI自身の申告（available / search_only / unavailable）。申告がなければ空。 */
+  reported: string;
 }
 
 export interface AdapterAvailability {
@@ -65,7 +91,10 @@ export interface ExecutionAdapter {
 }
 
 export function emptyResult(status: StageOutcome, patch: Partial<StageResult> = {}): StageResult {
-  return { status, summary: '', items: [], evidence: [], error: '', costUsd: null, costNote: '', numTurns: null, ...patch };
+  return {
+    status, summary: '', items: [], evidence: [], error: '', costUsd: null, costNote: '', numTurns: null,
+    model: '', usage: null, verdict: 'none', web: null, ...patch,
+  };
 }
 
 /** AbortSignal の中止理由を工程結果に変換する。 */
