@@ -193,8 +193,15 @@ legend { font-weight: 700; padding: 0 0.3rem; }
   background: radial-gradient(ellipse at 50% 40%, #2a2c26 0%, #1b1c18 55%, #141512 100%);
   min-height: 420px;
 }
-.hq-scene-scroll { width: 100%; overflow: hidden; }
-.iso-scene { display: block; width: 100%; height: auto; max-height: calc(100vh - 130px); margin: 0 auto; font-family: inherit; user-select: none; }
+/* カメラで画角を動かす表示領域。縦のスワイプはページのスクロールに使う（touch-action: pan-y） */
+.hq-scene { width: 100%; height: max(460px, calc(100vh - 140px)); cursor: grab; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.hq-scene:active { cursor: grabbing; }
+.iso-scene { display: block; width: 100%; height: 100%; font-family: inherit; user-select: none; }
+.cam-controls { position: absolute; left: 12px; bottom: 12px; display: flex; gap: 4px; z-index: 6; }
+.cam-controls button { font: inherit; font-size: 0.85rem; min-width: 36px; height: 34px; border-radius: 8px; border: 1px solid rgba(242,240,231,.25); background: rgba(20,21,18,.72); color: var(--offwhite); cursor: pointer; }
+.cam-controls button.wide { padding: 0 0.7rem; }
+.cam-controls button:hover { border-color: var(--green); }
+.cam-hint { position: absolute; right: 14px; bottom: 10px; margin: 0; font-size: 0.75rem; color: var(--gray); z-index: 5; pointer-events: none; }
 .hq-list { display: none; }
 
 .hq-panel {
@@ -403,12 +410,13 @@ legend { font-weight: 700; padding: 0 0.3rem; }
   .hq-tabs button { font: inherit; font-size: 0.86rem; font-weight: 700; border: 0; background: transparent; padding: 0.5rem 0; border-radius: 9px; color: var(--gray); }
   .hq-tabs button.active { color: var(--ink); background: var(--green); }
   .hq-stage { min-height: 0; border-radius: 0; }
-  .hq-scene-scroll { overflow-x: auto; overflow-y: hidden; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
-  .iso-scene { width: 920px; max-width: none; max-height: none; }
+  .hq-scene { height: max(360px, calc(100dvh - 52px - 110px - 64px)); }
+  .cam-controls { left: 8px; bottom: 8px; }
+  .cam-controls button { height: 32px; font-size: 0.8rem; }
   .hq-stage.view-people, .hq-stage.view-jobs { background: transparent; overflow: visible; padding: 0 12px; }
-  .view-people .hq-scene-scroll, .view-jobs .hq-scene-scroll { display: none; }
+  .view-people .hq-scene, .view-jobs .hq-scene, .view-people .cam-controls, .view-jobs .cam-controls { display: none; }
   .view-people .people-list, .view-jobs .jobs-list { display: flex; flex-direction: column; gap: 0.5rem; }
-  .hq-panel { position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto; max-height: 72vh; border-radius: 16px 16px 0 0; z-index: 60; }
+  .hq-panel { position: fixed; left: 0; right: 0; bottom: 0; top: auto; width: auto; max-height: 60vh; border-radius: 16px 16px 0 0; z-index: 60; box-shadow: 0 -10px 30px rgba(0,0,0,.3); }
   .detail-grid, .library-grid { grid-template-columns: 1fr; }
   .timeline li { grid-template-columns: 1fr; gap: 0.1rem; }
   .board { grid-template-columns: 1fr; }
@@ -423,3 +431,41 @@ legend { font-weight: 700; padding: 0 0.3rem; }
   .desktop-only { display: none !important; }
   .hq-hud .btn.primary { padding: 0.32rem 0.75rem; font-size: 0.88rem; white-space: nowrap; }
 }
+
+/* ---- 社員を選んだときの体験 ---- */
+.desk-highlight { fill: rgba(145,179,106,.22); stroke: #91b36a; stroke-width: 1.4; stroke-dasharray: 4 3; pointer-events: none; }
+.emp-state { background: var(--surface-2); border-radius: 10px; padding: 0.55rem 0.7rem; margin-bottom: 0.4rem; display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.6rem; }
+.emp-state p { margin: 0; width: 100%; font-size: 0.9rem; }
+.emp-state.state-error { background: var(--st-error-soft); }
+.emp-state.state-waiting_review { background: var(--st-review-soft); }
+.emp-error { border: 1px solid var(--st-error); border-radius: 10px; padding: 0.2rem 0.7rem 0.4rem; margin: 0.4rem 0; }
+.emp-error h3 { color: var(--st-error) !important; }
+.emp-error p { margin: 0 0 0.3rem; font-size: 0.88rem; }
+.consult { border-left: 3px solid var(--st-review); padding: 0.2rem 0 0.2rem 0.6rem; margin-bottom: 0.5rem; }
+.panel-actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 1rem 0 0.6rem; position: sticky; bottom: 0; background: var(--surface); padding: 0.5rem 0 0.2rem; }
+.btn.attention { background: var(--st-review); border-color: var(--st-review); color: var(--ink); font-weight: 700; }
+.link-button { font: inherit; background: none; border: 0; padding: 0; color: var(--ink); text-decoration: underline; text-decoration-color: var(--green); text-decoration-thickness: 2px; text-underline-offset: 3px; cursor: pointer; }
+.list-stack { display: flex; flex-direction: column; gap: 0.45rem; }
+.job-row.is-error { border-color: var(--st-error); background: var(--st-error-soft); }
+.decision-list li.is-error { border-color: var(--st-error); background: var(--st-error-soft); }
+.decision-list .row-top { display: flex; gap: 0.3rem; margin-bottom: 0.15rem; }
+.hud-stat.error .hud-icon { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--st-error); color: #fff; font-weight: 900; font-size: 0.75rem; }
+.empty-start { text-align: center; padding: 1rem; border: 1px dashed var(--line-strong); border-radius: 12px; }
+.approval-card.is-focused { box-shadow: 0 0 0 3px var(--green); scroll-margin-top: 70px; }
+
+/* ---- 実際の出来事の通知 ---- */
+.toasts { position: absolute; top: 12px; left: 12px; z-index: 8; display: flex; flex-direction: column; gap: 6px; max-width: min(420px, calc(100% - 24px)); }
+.toast { font: inherit; font-size: 0.85rem; text-align: left; display: flex; align-items: center; gap: 0.45rem; background: rgba(251,250,246,.96); color: var(--ink); border: 1px solid var(--line); border-left: 4px solid var(--st-idle); border-radius: 10px; padding: 0.4rem 0.65rem; cursor: pointer; box-shadow: 0 6px 18px rgba(0,0,0,.25); animation: toast-in 0.25s ease-out; }
+.toast-icon { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--st-idle); color: #fff; font-weight: 900; font-size: 0.75rem; flex: none; }
+.toast.toast-review { border-left-color: var(--st-review); } .toast.toast-review .toast-icon { background: var(--st-review); color: var(--ink); }
+.toast.toast-error { border-left-color: var(--st-error); } .toast.toast-error .toast-icon { background: var(--st-error); }
+.toast.toast-done { border-left-color: var(--ink); } .toast.toast-done .toast-icon { background: var(--ink); }
+.toast.toast-info { border-left-color: var(--st-working); } .toast.toast-info .toast-icon { background: var(--st-working); }
+.toast-demo { font-size: 0.7rem; border: 1px dashed var(--ink); border-radius: 4px; padding: 0 0.3rem; flex: none; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+@media (max-width: 760px) { .toasts { top: 8px; left: 8px; } .toast { font-size: 0.8rem; } }
+.tag-bg.is-error { stroke: var(--st-error); stroke-width: 2; }
+.pb-title { font-size: 5.6px; font-weight: 800; fill: #f2f0e7; letter-spacing: 1.2px; }
+.pb-count { font-size: 6px; font-weight: 800; fill: #91b36a; }
+.pb-card { font-size: 3.9px; font-weight: 700; fill: #141512; }
+.pb-empty { font-size: 4.6px; font-weight: 700; fill: #f2f0e7; }

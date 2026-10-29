@@ -107,7 +107,10 @@ export function Monitor({ x, y, z, screen, on }: { x: number; y: number; z: numb
     <g>
       <ellipse cx={bx} cy={by} rx={7} ry={3} fill="#1d1e1a" />
       <path d={`M ${bx} ${by} L ${bx} ${by - 9}`} stroke="#1d1e1a" strokeWidth={2.2} />
+      {/* 背面からも分かるよう、作業中の画面の明かりを周囲に漏らす */}
+      {screen === '-y' && on && <ellipse cx={iso(x, y, z0 + 0.3)[0]} cy={iso(x, y, z0 + 0.3)[1]} rx={26} ry={16} fill="#cfe6f2" opacity={0.55} filter="url(#soft-light)" className="monitor-spill" />}
       <polygon points={panel} fill="#1d1e1a" stroke="#0e0f0c" strokeWidth={0.6} />
+      {screen === '-y' && on && <circle cx={iso(x + 0.36, y, z0 + 0.05)[0]} cy={iso(x + 0.36, y, z0 + 0.05)[1]} r={1.3} fill="#91b36a" />}
       {screen === '+y' && (
         <>
           <polygon points={inner(0.04, 2 * half - 0.04, z0 + 0.04, z1 - 0.04)} fill={on ? '#22303a' : '#2a2c27'} />
@@ -127,8 +130,36 @@ export function Monitor({ x, y, z, screen, on }: { x: number; y: number; z: numb
   );
 }
 
+/** デスクライト。机の上に小さな暖色の明かりを落とす（作業の有無とは関係のない照明）。 */
+function DeskLamp({ x, y, z }: { x: number; y: number; z: number }) {
+  const [px, py] = iso(x, y, z);
+  return (
+    <g>
+      <ellipse cx={px + 6} cy={py + 2} rx={16} ry={8} fill="#ffd9a3" opacity={0.45} filter="url(#soft-light)" />
+      <ellipse cx={px} cy={py} rx={3.4} ry={1.6} fill="#1d1e1a" />
+      <path d={`M ${px} ${py} L ${px - 1} ${py - 11} L ${px + 6} ${py - 15}`} fill="none" stroke="#1d1e1a" strokeWidth={1.1} />
+      <path d={`M ${px + 3.5} ${py - 17.5} L ${px + 10} ${py - 14} L ${px + 7.5} ${py - 10.5} Z`} fill="#1d1e1a" />
+      <ellipse cx={px + 8.6} cy={py - 11.6} rx={2.4} ry={1.2} fill="#ffe7bf" />
+    </g>
+  );
+}
+
+function Notebook({ x, y, z }: { x: number; y: number; z: number }) {
+  return (
+    <g transform={at(x, y, z)}>
+      <path d="M -6.5 0 L 0 3.2 L 6.5 0 L 0 -3.2 Z" fill="#91b36a" stroke="rgba(20,21,18,.3)" strokeWidth={0.4} />
+      <path d="M -6.5 0 L 0 3.2 L 0 4.2 L -6.5 1 Z" fill="#6f8f55" />
+      <path d="M -1 -2.7 L 5.5 0.5" stroke="#f2f0e7" strokeWidth={0.6} />
+    </g>
+  );
+}
+
 const renderProp = (p: DeskProp, x: number, y: number, z: number, accent: string): ReactNode => {
   switch (p) {
+    case 'lamp':
+      return <DeskLamp key={p} x={x} y={y} z={z} />;
+    case 'notebook':
+      return <Notebook key={p} x={x} y={y} z={z} />;
     case 'mug':
       return <Mug key={p} x={x} y={y} z={z} color={accent} />;
     case 'plant':
@@ -154,7 +185,7 @@ export interface BenchSide {
 }
 
 /** 共同デスクの1区画。奥の席（far）と手前の席（near）が背中合わせのモニターを共有する。 */
-export function BenchSegment({ index, far, near }: { index: number; far: BenchSide | null; near: BenchSide | null }) {
+export function BenchSegment({ index, far, near, highlight = null }: { index: number; far: BenchSide | null; near: BenchSide | null; highlight?: 'far' | 'near' | null }) {
   const segW = BENCH.w / BENCH.segments;
   const x = BENCH.x + segW * index;
   const { y, d, h } = BENCH;
@@ -172,13 +203,23 @@ export function BenchSegment({ index, far, near }: { index: number; far: BenchSi
         </g>
       ))}
       <Box g={{ x, y, z: h - 0.05, w: segW, d, h: 0.05 }} color={MATERIAL.oak} top={MATERIAL.laminate} />
+      {highlight && (
+        <polygon
+          className="desk-highlight"
+          points={pts(
+            highlight === 'far'
+              ? [[x + 0.06, y + 0.06, h], [x + segW - 0.06, y + 0.06, h], [x + segW - 0.06, mid - 0.08, h], [x + 0.06, mid - 0.08, h]]
+              : [[x + 0.06, mid + 0.08, h], [x + segW - 0.06, mid + 0.08, h], [x + segW - 0.06, y + d - 0.06, h], [x + 0.06, y + d - 0.06, h]],
+          )}
+        />
+      )}
       {/* キーボード */}
       {far && <polygon points={pts([[cx - 0.3, y + 0.25, h], [cx + 0.3, y + 0.25, h], [cx + 0.3, y + 0.45, h], [cx - 0.3, y + 0.45, h]])} fill="#d9d7ce" stroke="rgba(20,21,18,.25)" strokeWidth={0.4} />}
       {near && <polygon points={pts([[cx - 0.3, y + d - 0.45, h], [cx + 0.3, y + d - 0.45, h], [cx + 0.3, y + d - 0.25, h], [cx - 0.3, y + d - 0.25, h]])} fill="#d9d7ce" stroke="rgba(20,21,18,.25)" strokeWidth={0.4} />}
-      {far?.props.map((p, i) => renderProp(p, cx + (i === 0 ? -0.7 : 0.72), y + 0.35, h, far.accent))}
-      <Monitor x={cx} y={mid - 0.05} z={h} screen="-y" on={false} />
+      {far?.props.map((p, i) => renderProp(p, cx + [-0.72, 0.74, -0.46][i % 3], y + 0.3 + (i === 2 ? 0.12 : 0), h, far.accent))}
+      <Monitor x={cx} y={mid - 0.05} z={h} screen="-y" on={far?.working ?? false} />
       <Monitor x={cx} y={mid + 0.05} z={h} screen="+y" on={near?.working ?? false} />
-      {near?.props.map((p, i) => renderProp(p, cx + (i === 0 ? -0.72 : 0.7), y + d - 0.35, h, near.accent))}
+      {near?.props.map((p, i) => renderProp(p, cx + [-0.72, 0.7, 0.46][i % 3], y + d - 0.32 - (i === 2 ? 0.12 : 0), h, near.accent))}
     </g>
   );
 }

@@ -41,6 +41,12 @@ describe('デモ実行での一連の流れ', () => {
     expect(detail.activities.some((a: any) => a.kind === 'action' && a.message.includes('［デモ］'))).toBe(true);
     expect(employee(app, 'researcher').status).toBe('waiting_review');
     expect(employee(app, 'qa').status).toBe('waiting_review');
+    // 社員パネル用：最終更新時刻と、CEOへの確認事項の中身
+    const r = employee(app, 'researcher');
+    expect(r.lastActivityAt).not.toBeNull();
+    expect(r.pendingApprovals[0].items.length).toBeGreaterThan(0);
+    expect(r.recentDeliverables[0].createdAt).toBeTruthy();
+    expect(employee(app, 'builder').lastActivityAt).toBeNull();
 
     const content = (await api(app, 'GET', `/api/deliverables/${detail.deliverables[0].id}/content`)).body;
     expect(content.content).toContain('【デモ出力】');

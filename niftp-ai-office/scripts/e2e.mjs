@@ -71,6 +71,9 @@ async function createJob(page, { title, scenario = 'normal', start = true }) {
 
 // オフィスの社員（data-status は実際の状態）
 const person = (page, id) => page.locator(`[data-employee="${id}"]`);
+const viewBox = (page) => page.locator('.iso-scene').getAttribute('viewBox');
+const settle = (page) => page.waitForTimeout(650);
+const vbWidth = (vb) => Number(vb.split(' ')[2]);
 const waitStatus = (page, id, status, timeout = 15000) => page.locator(`[data-employee="${id}"][data-status="${status}"]`).waitFor({ timeout });
 
 await startServer();
@@ -82,7 +85,7 @@ let jobId;
 try {
   await step('オフィス画面: エントランス・CEOのデスク・執務・会議室・資料棚・ラウンジと4人のAI社員、デモモード表示', async () => {
     await page.goto(base);
-    for (const id of ['entrance', 'whiteboard', 'achievements', 'ceo', 'meeting-sign', 'furniture-shelf-1', 'furniture-meeting-table']) {
+    for (const id of ['entrance', 'whiteboard', 'project-board', 'ceo', 'meeting-sign', 'furniture-shelf-1', 'furniture-meeting-table']) {
       await page.locator(`[data-testid="${id}"]`).first().waitFor();
     }
     for (const id of ['manager', 'researcher', 'builder', 'qa']) await person(page, id).waitFor();
@@ -96,6 +99,42 @@ try {
     await page.locator('.company-pop summary').click();
     if ((await page.locator('.character.is-working').count()) !== 0) throw new Error('待機中なのに作業中の演出が表示されている');
     await page.screenshot({ path: path.join(shots, '01-office-idle.png') });
+
+    // 画角：初期表示（デスク中心）⇔ オフィス全体、拡大・縮小
+    const home = await viewBox(page);
+    await page.getByRole('button', { name: 'オフィス全体' }).click();
+    await settle(page);
+    const all = await viewBox(page);
+    if (!(vbWidth(all) > vbWidth(home) * 1.2)) throw new Error(`オフィス全体に切り替わらない（${home} → ${all}）`);
+    await page.screenshot({ path: path.join(shots, '01a-overview.png') });
+    await page.getByRole('button', { name: 'デスク中心' }).click();
+    await settle(page);
+    if ((await viewBox(page)) !== home) throw new Error('デスク中心に戻らない');
+    await page.getByRole('button', { name: '拡大' }).click();
+    await settle(page);
+    if (!(vbWidth(await viewBox(page)) < vbWidth(home))) throw new Error('拡大できない');
+    await page.getByRole('button', { name: 'デスク中心' }).click();
+    await settle(page);
+
+    // ドラッグで移動しても、社員を選択したことにならない
+    const box = await person(page, 'researcher').boundingBox();
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 + 90, box.y + box.height / 2 + 20, { steps: 8 });
+    await page.mouse.up();
+    await page.waitForTimeout(300);
+    if (await page.locator('[data-testid="employee-panel"]').count()) throw new Error('ドラッグで社員が選択されてしまう');
+    if ((await viewBox(page)) === home) throw new Error('ドラッグで画角が動かない');
+    await page.getByRole('button', { name: 'デスク中心' }).click();
+    await settle(page);
+
+    // プロジェクトボード：データがなければ「最初のプロジェクトを始める」
+    await page.getByRole('button', { name: 'オフィス全体' }).click();
+    await settle(page);
+    await page.locator('[data-testid="project-board"]').click();
+    await page.locator('[data-testid="projects-panel"]').getByRole('button', { name: '最初のプロジェクトを始める' }).click();
+    await page.waitForURL(/#\/request/);
+    await page.goto(base);
     // 家具のクリックが実際の機能につながる
     await page.locator('[data-testid="entrance"]').click();
     await page.locator('[data-testid="entrance-panel"]').getByText('構想上の名称（法人未設立）').waitFor();
@@ -122,17 +161,58 @@ try {
     await page.locator('.fx-bubble').first().waitFor({ timeout: 5000 });
     await page.screenshot({ path: path.join(shots, '02-office-working.png') });
     await page.locator('.hud-running', { hasText: 'E2E 競合料金調査' }).waitFor();
+    const before = await viewBox(page);
     await person(page, 'researcher').click();
-    await page.locator('[data-testid="employee-panel"]').getByText('E2E 競合料金調査').first().waitFor();
-    await page.locator('[data-testid="employee-panel"]').getByText('調査・企画AI').waitFor();
+    const panel = page.locator('[data-testid="employee-panel"]');
+    await panel.getByText('E2E 競合料金調査').first().waitFor();
+    await panel.getByText('調査・企画AI').waitFor();
+    for (const t of ['得意な仕事', '取り組んでいる案件', '直近の成果物', 'CEOへの確認事項']) await panel.getByText(t, { exact: true }).waitFor();
+    await panel.getByText(/最終更新 \d/).waitFor();
+    await panel.getByText(/工程を進めています/).waitFor();
+    await settle(page);
+    // 選んだ社員へ寄り、詳細パネルに隠れない
+    if (!(vbWidth(await viewBox(page)) < vbWidth(before))) throw new Error('選択した社員へ寄らない');
+    const pb = await person(page, 'researcher').boundingBox();
+    const panelBox = await panel.boundingBox();
+    if (!(pb.x + pb.width < panelBox.x)) throw new Error('選択した社員が詳細パネルに隠れている');
+    await page.locator('.desk-highlight').waitFor({ state: 'attached' });
     await page.screenshot({ path: path.join(shots, '03-employee-panel.png') });
+    // 閉じると元の画角に戻る
+    await panel.getByRole('button', { name: '閉じる' }).click();
+    await settle(page);
+    if ((await viewBox(page)) !== before) throw new Error('パネルを閉じても元の画角に戻らない');
     // 品質確認への引き継ぎで書類が渡る演出
     await waitStatus(page, 'qa', 'working', 20000);
     await page.locator('.fx-doc').first().waitFor({ state: 'attached', timeout: 5000 });
     await waitStatus(page, 'researcher', 'waiting_review', 20000);
   });
 
+  await step('社員パネルから「確認に答える」で該当の承認へ、「仕事を依頼する」で担当選択済みの依頼フォームへ', async () => {
+    await person(page, 'researcher').click();
+    const panel = page.locator('[data-testid="employee-panel"]');
+    await panel.getByRole('button', { name: '確認に答える' }).click();
+    await page.waitForURL(/#\/approvals\/\d+/);
+    await page.locator('.approval-card.is-focused', { hasText: 'E2E 競合料金調査' }).waitFor();
+    await page.goto(base);
+    await person(page, 'builder').click();
+    await page.locator('[data-testid="employee-panel"]').getByRole('button', { name: '仕事を依頼する' }).click();
+    await page.waitForURL(/#\/request\?assignee=builder/);
+    if ((await page.getByLabel(/担当社員/).inputValue()) !== 'builder') throw new Error('担当社員が選択された状態で開かない');
+    await page.goto(base);
+  });
+
+  await step('再読み込みしても通知や演出が繰り返されない', async () => {
+    await page.reload();
+    await person(page, 'qa').waitFor();
+    await page.waitForTimeout(2500);
+    const toasts = await page.locator('.toast').count();
+    const bubbles = await page.locator('.fx-bubble').count();
+    if (toasts || bubbles) throw new Error(`再読み込みで過去の出来事が再演出された（通知 ${toasts}・吹き出し ${bubbles}）`);
+  });
+
   await step('CEOのデスクと資料棚に通知が出て、クリックで承認・成果物へつながる', async () => {
+    await page.getByRole('button', { name: 'オフィス全体' }).click();
+    await settle(page);
     await page.locator('[data-testid="ceo-notice"]').waitFor();
     await page.locator('[data-testid="hud-pending"]', { hasText: '1' }).waitFor();
     await page.screenshot({ path: path.join(shots, '03b-office-review.png') });
@@ -144,6 +224,11 @@ try {
     await page.locator('.file-content', { hasText: '【デモ出力】' }).waitFor();
     await page.goto(base);
     if (await page.locator('[data-testid="shelf-notice"]').count()) throw new Error('開いた後も新着通知が残っている');
+    await page.getByRole('button', { name: '一覧' }).click();
+    await page.locator('[data-testid="list-panel"] .person-card').nth(3).waitFor();
+    await page.locator('[data-testid="list-panel"] .person-card', { hasText: 'リツ' }).click();
+    await page.locator('[data-testid="employee-panel"]').getByText('品質確認AI').waitFor();
+    await page.locator('[data-testid="employee-panel"]').getByRole('button', { name: '閉じる' }).click();
     await page.getByRole('button', { name: '出来事' }).click();
     await page.locator('[data-testid="events-panel"]').getByText('レビュー依頼').first().waitFor();
     await page.screenshot({ path: path.join(shots, '03d-events-panel.png') });
@@ -191,9 +276,12 @@ try {
     await page.locator('.table').getByText('出典URLを各数値の横に追加してください').waitFor();
     await page.screenshot({ path: path.join(shots, '07-approval-history.png'), fullPage: true });
     await page.goto(base);
-    await page.locator('[data-testid="achievements"]').click();
-    await page.locator('[data-testid="achievements-panel"]').getByText('E2E 競合料金調査').waitFor();
-    await page.screenshot({ path: path.join(shots, '07b-achievements.png') });
+    await page.getByRole('button', { name: 'オフィス全体' }).click();
+    await settle(page);
+    await page.locator('[data-testid="project-board"]').click();
+    await page.locator('[data-testid="projects-panel"]').getByText('E2E 競合料金調査').waitFor();
+    await page.locator('[data-testid="projects-panel"]').getByRole('button', { name: /成果を見る/ }).first().waitFor();
+    await page.screenshot({ path: path.join(shots, '07b-project-board.png') });
     await waitStatus(page, 'researcher', 'done');
   });
 
@@ -205,6 +293,13 @@ try {
     await page.locator('.col-error .card', { hasText: 'E2E エラー確認' }).waitFor();
     await page.goto(base);
     await waitStatus(page, 'researcher', 'error');
+    await page.locator('.name-tag', { hasText: 'エラー' }).first().waitFor();
+    await person(page, 'researcher').click();
+    const panel = page.locator('[data-testid="employee-panel"]');
+    await panel.getByText('エラーの理由').waitFor();
+    await panel.getByText('エラー再現シナリオ').first().waitFor();
+    await panel.getByText('次の対応').waitFor();
+    await panel.getByRole('button', { name: '案件を見る' }).waitFor();
     await page.screenshot({ path: path.join(shots, '08-error.png') });
     void id;
   });
@@ -246,6 +341,11 @@ try {
     await page.goto(base);
     await page.getByRole('button', { name: '動きを減らす' }).click();
     if ((await page.evaluate(() => document.documentElement.dataset.motion)) !== 'reduced') throw new Error('動きを減らす設定が反映されない');
+    // 動きを減らす設定では画角の切り替えが即時
+    await page.getByRole('button', { name: 'オフィス全体' }).click();
+    const immediate = await viewBox(page);
+    await settle(page);
+    if (immediate !== (await viewBox(page))) throw new Error('動きを減らす設定でも画角がアニメーションしている');
     await page.getByRole('button', { name: '動きを戻す' }).click();
     if ((await page.evaluate(() => document.documentElement.dataset.motion)) !== 'full') throw new Error('動きを戻せない');
   });
@@ -261,14 +361,28 @@ try {
       const box = await page.locator(sel).boundingBox();
       if (!box || box.y + box.height > 844) throw new Error(`${sel} が初期表示に入っていません`);
     }
-    const sceneBox = await page.locator('.hq-scene-scroll').boundingBox();
+    const sceneBox = await page.locator('.hq-scene').boundingBox();
     if (!sceneBox || sceneBox.y > 200) throw new Error('オフィスが画面下に押し出されています');
+    // 縦のスワイプはページのスクロールに使われ、オフィスの操作で妨げない
+    const touchAction = await page.locator('.hq-scene').evaluate((el) => getComputedStyle(el).touchAction);
+    if (touchAction !== 'pan-y') throw new Error(`touch-action が pan-y ではありません（${touchAction}）`);
+    // 社員の名札が読める大きさ
+    const tag = await page.locator('.name-tag', { hasText: 'ミナ' }).boundingBox();
+    if (!tag || tag.height < 11) throw new Error(`名札が小さすぎます（${tag?.height}px）`);
     await page.getByRole('button', { name: 'メニュー' }).click();
     await page.locator('.menu-sheet').getByText('構想上の名称（法人未設立）').waitFor();
     await page.getByRole('button', { name: 'メニュー' }).click();
-    const sceneWidth = await page.locator('.iso-scene').evaluate((el) => el.getBoundingClientRect().width);
-    if (sceneWidth < 800) throw new Error(`オフィスが縮小されすぎています（${sceneWidth}px）`);
     await page.screenshot({ path: path.join(shots, '11-mobile.png') });
+    // オフィスで社員を選ぶと下からパネルが開き、社員はパネルの上に見える
+    await person(page, 'researcher').click();
+    const sheet = page.locator('[data-testid="employee-panel"]');
+    await sheet.waitFor();
+    await settle(page);
+    const pbox = await person(page, 'researcher').boundingBox();
+    const sbox = await sheet.boundingBox();
+    if (!(pbox.y + pbox.height * 0.5 < sbox.y)) throw new Error('選択した社員が下からのパネルに隠れている');
+    await page.screenshot({ path: path.join(shots, '11b-mobile-select.png') });
+    await sheet.getByRole('button', { name: '閉じる' }).click();
     await page.getByRole('tab', { name: /社員/ }).click();
     await page.locator('.person-card', { hasText: 'ミナ' }).click();
     await page.locator('[data-testid="employee-panel"]').waitFor();

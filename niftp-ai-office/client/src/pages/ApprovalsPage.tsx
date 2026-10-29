@@ -19,11 +19,13 @@ export function ApprovalCard({
   requesterName,
   deliverables,
   onDone,
+  focused = false,
 }: {
   approval: Omit<ApprovalView, 'jobTitle'> & { jobTitle?: string };
   requesterName: string;
   deliverables: DeliverableView[];
   onDone?: () => void;
+  focused?: boolean;
 }) {
   const [comment, setComment] = useState('');
   const [busy, setBusy] = useState(false);
@@ -43,7 +45,7 @@ export function ApprovalCard({
     }
   };
   return (
-    <article className="approval-card">
+    <article className={`approval-card ${focused ? 'is-focused' : ''}`} id={`approval-${approval.id}`} data-testid={`approval-${approval.id}`}>
       <header>
         <h3>{approval.title}</h3>
         <div className="muted small">
@@ -105,7 +107,11 @@ export function useDeliverables() {
   return useDeliverablesState().list;
 }
 
-export function ApprovalsPage({ snapshot }: Props) {
+export function ApprovalsPage({ snapshot, focusId }: Props & { focusId?: number }) {
+  // オフィスの「確認に答える」から来たときは、該当の確認事項へ移動する
+  useEffect(() => {
+    if (focusId) document.getElementById(`approval-${focusId}`)?.scrollIntoView({ block: 'start' });
+  }, [focusId]);
   const deliverables = useDeliverables();
   const nameOf = (id: string) => snapshot.employees.find((e) => e.id === id)?.name ?? id;
   const pending = snapshot.approvals.filter((a) => a.status === 'pending');
@@ -116,7 +122,7 @@ export function ApprovalsPage({ snapshot }: Props) {
       <p className="muted">AI社員から届いた確認依頼です。承認すると案件は完了、差し戻すとコメント付きで未着手に戻ります（再開始はCEOが行います）。</p>
       {pending.length === 0 && <Empty>確認待ちはありません。</Empty>}
       {pending.map((a) => (
-        <ApprovalCard key={a.id} approval={a} requesterName={nameOf(a.requestedBy)} deliverables={deliverables} />
+        <ApprovalCard key={a.id} approval={a} requesterName={nameOf(a.requestedBy)} deliverables={deliverables} focused={a.id === focusId} />
       ))}
 
       <h2>承認記録</h2>

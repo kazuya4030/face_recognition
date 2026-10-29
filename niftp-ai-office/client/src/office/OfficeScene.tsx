@@ -46,12 +46,15 @@ const STATUS_LABEL: Record<EmployeeView['status'], string> = {
   error: 'エラー',
 };
 
+const BOARD_TONE: Record<string, string> = { running: 'working', queued: 'idle', paused: 'idle', draft: 'idle', awaiting_review: 'review', completed: 'done', error: 'error' };
+const BOARD_LABEL: Record<string, string> = { running: '▶', queued: '…', paused: 'Ⅱ', draft: '○', awaiting_review: '!', completed: '✓', error: '×' };
+
 const TARGET_LABEL: Record<Target, string> = {
   ceo: 'CEOの席（承認待ちを確認する）',
   shelf: '資料棚（成果物）',
   meeting: 'プロジェクトルーム（仕事を依頼する）',
   whiteboard: 'ホワイトボード（案件ボード）',
-  achievements: '実績ボード',
+  achievements: 'プロジェクトボード',
   entrance: 'エントランス（会社情報）',
 };
 
@@ -64,12 +67,12 @@ type Props = {
   onTarget: (t: Target) => void;
   unseenCount: number;
   onOpenNewest: () => void;
-  completedCount: number;
-  deliverableCount: number;
   fresh: OfficeEvent[];
   consume: (keys: string[]) => void;
   reducedMotion: boolean;
   now: Date;
+  /** カメラが決めた表示範囲（SVG の viewBox）。 */
+  viewBox?: string;
 };
 
 interface Occupant {
@@ -81,6 +84,20 @@ interface Occupant {
   employee: EmployeeView | null; // null は CEO
 }
 
+/** 社員の席（sortOrder 順）と、カメラで寄るときの注目点（上半身のあたり）。 */
+export function seatOf(employees: EmployeeView[], id: string): Seat | null {
+  if (id === 'ceo') return CEO_SEAT;
+  const i = [...employees].sort((a, b) => a.sortOrder - b.sortOrder).findIndex((e) => e.id === id);
+  return i >= 0 && i < EMPLOYEE_SEATS.length ? EMPLOYEE_SEATS[i] : null;
+}
+
+export function focusPointOf(employees: EmployeeView[], id: string): [number, number] | null {
+  const seat = seatOf(employees, id);
+  if (!seat) return null;
+  const [x, y] = iso(seat.x, seat.y, 0);
+  return [x, y - SEAT_LIFT - 34];
+}
+
 export function OfficeScene(props: Props) {
   const { snapshot, selected, onSelectEmployee, onTarget, unseenCount, onOpenNewest, fresh, consume, reducedMotion } = props;
   const pending = snapshot.approvals.filter((a) => a.status === 'pending').length;
@@ -90,12 +107,23 @@ export function OfficeScene(props: Props) {
     return c;
   }, [snapshot.jobs]);
 
+  // プロジェクトボードに貼る最近の案件（キャンセル済みは除く）
+  const boardProjects = useMemo(
+    () =>
+      [...snapshot.jobs]
+        .filter((j) => j.status !== 'cancelled')
+        .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
+        .slice(0, 4)
+        .map((j) => ({ id: j.id, title: j.title, tone: BOARD_TONE[j.status] ?? 'idle', label: BOARD_LABEL[j.status] ?? '' })),
+    [snapshot.jobs],
+  );
+
   const occupants = useMemo(() => {
     const list: Occupant[] = [...snapshot.employees]
       .sort((a, b) => a.sortOrder - b.sortOrder)
       .slice(0, EMPLOYEE_SEATS.length)
       .map((e, i) => ({ key: e.id, seat: EMPLOYEE_SEATS[i], look: appearanceOf(e.id), working: e.status === 'working', accent: e.color, employee: e }));
-    list.push({ key: 'ceo', seat: CEO_SEAT, look: CEO_APPEARANCE, working: false, accent: '#f2f0e7', employee: null });
+    list.push({ key: 'ceo', seat: CEO_SEAT, look: CEO_APPEARANCE, working: false, accent: '#91b36a', employee: null });
     return list;
   }, [snapshot.employees]);
 
@@ -163,13 +191,22 @@ export function OfficeScene(props: Props) {
     });
   }
 
-  // 共同デスク（3区画）
+  // 共同デスク（3区画）。選択中の社員の席側を控えめに強調する
+  const selectedSeat = selected ? (occupants.find((o) => o.key === selected)?.seat ?? null) : null;
   const sides = new Map<string, BenchSide>();
   for (const o of occupants) sides.set(`${o.seat.facing}-${segOf(o.seat)}`, { working: o.working, props: o.look.deskProps, accent: o.accent });
   for (let i = 0; i < BENCH.segments; i++) {
     layers.push({
       key: BENCH.x + SEG_W * (i + 0.5) + BENCH.y + BENCH.d / 2,
-      node: <BenchSegment key={`bench-${i}`} index={i} far={sides.get(`front-${i}`) ?? null} near={sides.get(`back-${i}`) ?? null} />,
+      node: (
+        <BenchSegment
+          key={`bench-${i}`}
+          index={i}
+          far={sides.get(`front-${i}`) ?? null}
+          near={sides.get(`back-${i}`) ?? null}
+          highlight={selectedSeat && segOf(selectedSeat) === i ? (selectedSeat.facing === 'front' ? 'far' : 'near') : null}
+        />
+      ),
     });
   }
 
@@ -213,7 +250,8 @@ export function OfficeScene(props: Props) {
         <Hit key={`person-${o.key}`} label={label} onClick={onClick} testId={isCeo ? 'ceo' : `employee-${e.id}`}>
           <g className={`person status-${isCeo ? 'ceo' : e.status}`} data-employee={isCeo ? undefined : e.id} data-status={isCeo ? undefined : e.status}>
             <g transform={`translate(${sx} ${sy - SEAT_LIFT})`}>
-              <ellipse cx={0} cy={-26} rx={22} ry={34} fill="transparent" />
+              {/* 見た目より少し広いクリック領域 */}
+              <ellipse cx={0} cy={-24} rx={28} ry={42} fill="transparent" />
               <Character look={o.look} facing={o.seat.facing} working={o.working} blinkDelay={(o.seat.x * 0.7) % 5} />
             </g>
           </g>
@@ -231,9 +269,9 @@ export function OfficeScene(props: Props) {
   const shelfTop = iso(0.35, 8.9, 2.6);
 
   return (
-    <svg className="iso-scene" viewBox={`0 0 ${VIEW.w} ${VIEW.h}`} role="group" aria-label="NIFTP本社のオフィス">
+    <svg className="iso-scene" viewBox={props.viewBox ?? `0 0 ${VIEW.w} ${VIEW.h}`} preserveAspectRatio="xMidYMid meet" role="group" aria-label="NIFTP本社のオフィス">
       <SceneDefs />
-      <Room now={props.now} counts={counts} completedCount={props.completedCount} deliverableCount={props.deliverableCount} onTarget={onTarget} />
+      <Room now={props.now} counts={counts} projects={boardProjects} projectCount={snapshot.jobs.filter((j) => j.status !== 'cancelled').length} onTarget={onTarget} />
       {floorItems.map((it) =>
         it.target ? (
           <Hit key={it.id} label={TARGET_LABEL[it.target]} onClick={() => onTarget(it.target!)}>
@@ -260,30 +298,25 @@ export function OfficeScene(props: Props) {
           const nameW = textWidth(name, 9.5) + (e ? 20 : 14);
           return (
             <g key={`tag-${o.key}`} className="name-tag" transform={`translate(${sx} ${top - 4})`} onClick={() => (e ? onSelectEmployee(e.id) : onTarget('ceo'))}>
-              <rect x={-nameW / 2} y={-13} width={nameW} height={15} rx={4} className={`tag-bg ${e && selected === e.id ? 'is-selected' : ''}`} />
+              <rect x={-nameW / 2} y={-13} width={nameW} height={15} rx={4} className={`tag-bg ${e && selected === e.id ? 'is-selected' : ''} ${e?.status === 'error' ? 'is-error' : ''}`} />
               {e && <circle cx={-nameW / 2 + 7.5} cy={-5.5} r={2.8} className={`tone-fill-${chip?.tone ?? 'idle'}`} />}
               <text x={e ? -nameW / 2 + 13.5 : 0} y={-2.3} textAnchor={e ? 'start' : 'middle'} className="tag-text">
                 {name}
               </text>
-              {chip && (
-                <g transform={`translate(${nameW / 2 + 2} -12.5)`}>
-                  {e?.status === 'working' ? (
-                    <g className="chip">
-                      <rect x={0} y={0} width={30} height={14} rx={4} className="tone-fill-working" />
-                      <text x={15} y={10} textAnchor="middle" className="chip-text">
-                        {progress || '作業中'}
-                      </text>
-                    </g>
-                  ) : (
-                    <g className="chip">
-                      <rect x={0} y={0} width={14} height={14} rx={4} className={`tone-fill-${chip.tone}`} />
-                      <text x={7} y={10.5} textAnchor="middle" className={`chip-text ${chip.tone === 'review' ? 'dark' : ''}`}>
-                        {chip.icon}
-                      </text>
-                    </g>
-                  )}
-                </g>
-              )}
+              {chip && (() => {
+                // 色だけに頼らず、記号と短い文字でも状態を示す
+                // デモ実行は「デモ実行」と表示し、実際のAIの作業と区別する
+                const text = e?.status === 'working' ? `${job?.adapter === 'demo' ? 'デモ実行' : '作業中'} ${progress}`.trim() : `${chip.icon} ${STATUS_LABEL[e!.status]}`;
+                const w = textWidth(text, 8.5) + 10;
+                return (
+                  <g className={`chip chip-${chip.tone}`} transform={`translate(${nameW / 2 + 2} -12.5)`}>
+                    <rect x={0} y={0} width={w} height={14} rx={4} className={`tone-fill-${chip.tone}`} />
+                    <text x={w / 2} y={10} textAnchor="middle" className={`chip-text ${chip.tone === 'review' ? 'dark' : ''}`}>
+                      {text}
+                    </text>
+                  </g>
+                );
+              })()}
             </g>
           );
         })}

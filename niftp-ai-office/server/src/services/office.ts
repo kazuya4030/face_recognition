@@ -11,6 +11,7 @@ import {
   type EmployeeStatus,
   type Job,
   type JobAction,
+  type ReviewItem,
   type Settings,
 } from '../domain/types.ts';
 import type { ChangeBus } from '../events.ts';
@@ -54,8 +55,10 @@ export interface EmployeeView extends Employee {
   statusDetail: string;
   currentJob: { id: number; title: string; stage: string } | null;
   queuedJobs: { id: number; title: string }[];
-  pendingApprovals: { id: number; jobId: number; title: string; itemCount: number }[];
-  recentDeliverables: { id: number; jobId: number; title: string; isDemo: boolean }[];
+  pendingApprovals: { id: number; jobId: number; title: string; itemCount: number; items: ReviewItem[] }[];
+  recentDeliverables: { id: number; jobId: number; title: string; isDemo: boolean; createdAt: string }[];
+  /** この社員の直近の記録（実行の開始・終了、成果物、確認依頼）の時刻。記録がなければ null。 */
+  lastActivityAt: string | null;
 }
 
 export class OfficeService {
@@ -165,12 +168,16 @@ export class OfficeService {
         .map((j) => ({ id: j.id, title: j.title }));
       const pendingApprovals = approvals
         .filter((a) => a.requestedBy === e.id || runs.some((r) => r.jobId === a.jobId && r.attempt === a.attempt && r.employeeId === e.id))
-        .map((a) => ({ id: a.id, jobId: a.jobId, title: a.title, itemCount: a.items.length }));
-      const recentDeliverables = deliverables
-        .filter((d) => d.employeeId === e.id)
-        .slice(0, 5)
-        .map((d) => ({ id: d.id, jobId: d.jobId, title: d.title, isDemo: d.isDemo }));
-      return { ...e, status, statusDetail, currentJob, queuedJobs, pendingApprovals, recentDeliverables };
+        .map((a) => ({ id: a.id, jobId: a.jobId, title: a.title, itemCount: a.items.length, items: a.items }));
+      const mine = deliverables.filter((d) => d.employeeId === e.id);
+      const recentDeliverables = mine.slice(0, 5).map((d) => ({ id: d.id, jobId: d.jobId, title: d.title, isDemo: d.isDemo, createdAt: d.createdAt }));
+      const times = [
+        ...myRuns.flatMap((r) => [r.startedAt, r.finishedAt]),
+        ...mine.map((d) => d.createdAt),
+        ...pendingApprovals.map((a) => approvals.find((x) => x.id === a.id)?.createdAt ?? null),
+      ].filter((t): t is string => t != null);
+      const lastActivityAt = times.length > 0 ? times.reduce((m, t) => (t > m ? t : m)) : null;
+      return { ...e, status, statusDetail, currentJob, queuedJobs, pendingApprovals, recentDeliverables, lastActivityAt };
     });
   }
 

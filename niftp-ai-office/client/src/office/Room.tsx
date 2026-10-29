@@ -1,6 +1,6 @@
 // 床・壁・窓・扉と、壁の掲示物。空間の主役は入口から見える黒い壁の NIFTP ロゴ。
 // ロゴは提供された画像（背景だけ透過にしたもの）を、縦横比を保ったまま壁面に沿わせて配置する。
-// ホワイトボードと実績ボードは実際の案件の件数だけを表示する（架空の数値は出さない）。
+// ホワイトボードとプロジェクトボードは実際の案件だけを表示する（架空の数値・実績は出さない）。
 import type { KeyboardEvent, ReactNode } from 'react';
 import { ROOM, heightPx, iso, pts, wallLen, wallTransform } from './iso.ts';
 import { LIGHT_POOLS, MATERIAL, WALL, type Target } from './layout.ts';
@@ -64,8 +64,9 @@ type Counts = { todo: number; doing: number; review: number; done: number; error
 type Props = {
   now: Date;
   counts: Counts;
-  completedCount: number;
-  deliverableCount: number;
+  /** プロジェクトボードに貼る最近の案件（実データ）。 */
+  projects: { id: number; title: string; tone: string; label: string }[];
+  projectCount: number;
   onTarget: (t: Target) => void;
 };
 
@@ -173,18 +174,17 @@ function ConcreteMarks({ wall, from, to }: { wall: 'back-right' | 'back-left'; f
   );
 }
 
-export function Room({ now, counts, completedCount, deliverableCount, onTarget }: Props) {
+export function Room({ now, counts, projects, projectCount, onTarget }: Props) {
   const phase = dayPhase(now);
   const plankLines = Array.from({ length: D * 3 - 1 }, (_, i) => (i + 1) / 3);
   const bw = WALL.brandWall;
   const wb = WALL.whiteboard;
-  const ach = WALL.achievements;
+  const pb = WALL.projectBoard;
   const scr = WALL.projectScreen;
   const door = WALL.door;
   const brandLen = wallLen(bw.to - bw.from);
   const logoW = brandLen * 0.78;
   const logoH = logoW / LOGO_RATIO;
-  const cards = Math.min(completedCount, 8);
 
   return (
     <g className="room">
@@ -228,23 +228,42 @@ export function Room({ now, counts, completedCount, deliverableCount, onTarget }
         })}
       </g>
 
-      {/* 左の壁：実績ボード（コーヒーカウンターの上）。承認済みの案件を1件ごとにカードで留める */}
-      <Hit label={`実績ボード: 完了した案件${completedCount}件、保存済み成果物${deliverableCount}件`} onClick={() => onTarget('achievements')} testId="achievements">
-        <g transform={wallTransform('back-left', ach.to, ach.z)}>
-          <rect x={0} y={0} width={wallLen(ach.to - ach.from)} height={heightPx(ach.h)} rx={1.5} fill="#26281f" />
-          <text x={6} y={10} className="ach-title">
-            実績 {completedCount}件
+      {/* 左の壁：プロジェクトボード（コーヒーカウンターの上）。最近の案件を状態ごとの色と記号で貼る */}
+      <Hit
+        label={projectCount === 0 ? 'プロジェクトボード：まだ案件はありません（最初のプロジェクトを始める）' : `プロジェクトボード：案件${projectCount}件`}
+        onClick={() => onTarget('achievements')}
+        testId="project-board"
+      >
+        <g transform={wallTransform('back-left', pb.to, pb.z)}>
+          <rect x={-1.5} y={-1.5} width={wallLen(pb.to - pb.from) + 3} height={heightPx(pb.h) + 3} rx={2} fill={MATERIAL.metal} />
+          <rect x={0} y={0} width={wallLen(pb.to - pb.from)} height={heightPx(pb.h)} rx={1.5} fill="#26281f" />
+          <text x={4} y={7.5} className="pb-title">
+            PROJECTS
           </text>
-          {Array.from({ length: cards }, (_, i) => (
-            <g key={i} transform={`translate(${6 + (i % 4) * 11} ${15 + Math.floor(i / 4) * 8.5})`}>
-              <rect x={0} y={0} width={9} height={7} fill="#f2f0e7" />
-              <rect x={0} y={0} width={9} height={1.4} fill={i === cards - 1 ? '#91b36a' : '#a4a89d'} />
+          <text x={wallLen(pb.to - pb.from) - 4} y={7.5} textAnchor="end" className="pb-count">
+            {projectCount}
+          </text>
+          {projects.length === 0 ? (
+            <g>
+              <circle cx={9} cy={22} r={4.5} fill="#91b36a" />
+              <path d="M 9 19.6 L 9 24.4 M 6.6 22 L 11.4 22" stroke="#141512" strokeWidth={1.2} />
+              <text x={16} y={20.5} className="pb-empty">
+                最初のプロジェクトを
+              </text>
+              <text x={16} y={27} className="pb-empty">
+                始める
+              </text>
             </g>
-          ))}
-          {cards === 0 && (
-            <text x={6} y={22} className="ach-empty">
-              まだありません
-            </text>
+          ) : (
+            projects.map((p, i) => (
+              <g key={p.id} transform={`translate(3 ${11 + i * 7.6})`}>
+                <rect x={0} y={0} width={wallLen(pb.to - pb.from) - 6} height={6.4} rx={1} fill="#f2f0e7" />
+                <rect x={0} y={0} width={2} height={6.4} className={`tone-fill-${p.tone}`} />
+                <text x={4} y={4.6} className="pb-card">
+                  {p.label} #{p.id} {p.title.length > 9 ? `${p.title.slice(0, 9)}…` : p.title}
+                </text>
+              </g>
+            ))
           )}
         </g>
       </Hit>
@@ -271,6 +290,13 @@ export function Room({ now, counts, completedCount, deliverableCount, onTarget }
             </g>
           ))}
         </g>
+        {/* ロゴの周りの柔らかい間接照明（天井と床際のコーブ照明、ロゴの背後のほのかな明かり） */}
+        <g transform={wallTransform('back-right', bw.from, H, 0.1)} filter="url(#soft-light)" className="cove">
+          <rect x={6} y={2} width={brandLen - 12} height={7} fill="#ffd9a3" opacity={0.42} />
+          <rect x={6} y={heightPx(H) - 9} width={brandLen - 12} height={7} fill="#ffd9a3" opacity={0.3} />
+          <ellipse cx={brandLen / 2} cy={heightPx(0.75) + logoH / 2} rx={logoW * 0.55} ry={logoH * 0.85} fill="#f7e3c0" opacity={0.07} />
+        </g>
+        <polygon points={pts([[bw.from + 0.2, 0.12, 0.01], [bw.to - 0.2, 0.12, 0.01], [bw.to - 0.4, 1.3, 0.01], [bw.from + 0.4, 1.3, 0.01]])} fill="#ffe2b3" opacity={0.28} filter="url(#soft-light)" />
         <g transform={wallTransform('back-right', bw.from, H - 0.75, 0.1)}>
           <image href={LOGO_SRC} x={(brandLen - logoW) / 2} y={0} width={logoW} height={logoH} preserveAspectRatio="xMidYMid meet" data-testid="brand-logo" />
         </g>

@@ -124,7 +124,7 @@ export function App() {
         {page === 'request' && <RequestPage snapshot={snapshot} navigate={navigate} />}
         {page === 'board' && <BoardPage snapshot={snapshot} navigate={navigate} />}
         {page === 'jobs' && route[1] && <JobDetailPage key={route[1]} jobId={Number(route[1])} snapshot={snapshot} navigate={navigate} />}
-        {page === 'approvals' && <ApprovalsPage snapshot={snapshot} navigate={navigate} />}
+        {page === 'approvals' && <ApprovalsPage snapshot={snapshot} navigate={navigate} focusId={route[1] ? Number(route[1]) : undefined} />}
         {page === 'library' && <LibraryPage snapshot={snapshot} navigate={navigate} initialId={route[1] ? Number(route[1]) : undefined} />}
         {page === 'settings' && <SettingsPage snapshot={snapshot} />}
         {!NAV.some((n) => n.key === page) && page !== 'jobs' && <p>ページが見つかりません。</p>}

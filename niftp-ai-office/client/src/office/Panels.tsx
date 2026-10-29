@@ -2,11 +2,11 @@
 import type { ReactNode } from 'react';
 import type { DeliverableView, EmployeeView, OfficeEvent, Snapshot } from '../api.ts';
 import { Badge, CompanyInfo, DemoBadge } from '../components.tsx';
-import { EMPLOYEE_STATUS, formatTime } from '../labels.ts';
+import { EMPLOYEE_STATUS, JOB_STATUS, formatTime } from '../labels.ts';
 import { appearanceOf } from './appearance.ts';
 import { Portrait } from './Character.tsx';
 
-export type PanelKind = 'ceo' | 'shelf' | 'achievements' | 'events' | 'entrance' | { employee: string };
+export type PanelKind = 'ceo' | 'shelf' | 'projects' | 'events' | 'entrance' | 'list' | { employee: string };
 
 export function PanelShell({ title, onClose, children, testId }: { title: ReactNode; onClose: () => void; children: ReactNode; testId?: string }) {
   return (
@@ -27,14 +27,33 @@ export function EmployeePanel({
   snapshot,
   navigate,
   onClose,
+  onOpenDeliverable,
 }: {
   e: EmployeeView;
   snapshot: Snapshot;
   navigate: (p: string) => void;
   onClose: () => void;
+  onOpenDeliverable: (id: number) => void;
 }) {
   const st = EMPLOYEE_STATUS[e.status];
   const job = e.currentJob ? snapshot.jobs.find((j) => j.id === e.currentJob!.id) : undefined;
+  const running = job?.status === 'running';
+  const progress = running && job ? `${job.currentStageIndex + 1}/${job.stages.length}` : '';
+  const latest = e.recentDeliverables[0];
+  const consult = e.pendingApprovals[0];
+  // 社員の様子の説明は、実際の状態から作る短い説明だけにする（発言は作らない）
+  const summary =
+    e.status === 'working' && job
+      ? `#${job.id}「${job.title}」の「${job.currentStageLabel}」工程を進めています（${progress}）。`
+      : e.status === 'waiting_review'
+        ? `#${e.currentJob?.id}「${e.currentJob?.title}」の成果物について、CEOの確認を待っています。`
+        : e.status === 'error'
+          ? `#${e.currentJob?.id}「${e.currentJob?.title}」がエラーで止まっています。`
+          : e.status === 'done'
+            ? `直近の案件はCEOが承認済みです。`
+            : e.queuedJobs.length > 0
+              ? `順番待ちの案件が${e.queuedJobs.length}件あります。`
+              : '新しい依頼を待っています。';
   return (
     <PanelShell
       testId="employee-panel"
@@ -49,29 +68,44 @@ export function EmployeePanel({
         </span>
       }
     >
-      <p className="muted small">{e.description}</p>
-      <div className="emp-status">
-        <Badge tone={st.tone}>{st.label}</Badge> <span>{e.statusDetail}</span>
+      <div className={`emp-state state-${e.status}`} data-testid="employee-state">
+        <Badge tone={st.tone}>{st.label}</Badge>
+        <span className="muted small">最終更新 {e.lastActivityAt ? formatTime(e.lastActivityAt) : '記録なし'}</span>
+        <p>{summary}</p>
       </div>
 
-      <h3>現在の仕事</h3>
+      {e.status === 'error' && (
+        <div className="emp-error" role="alert">
+          <h3>エラーの理由</h3>
+          <p>{e.statusDetail}</p>
+          <h3>次の対応</h3>
+          <p>案件を開いて作業履歴を確認し、「やり直す」で再実行するか、「キャンセル」で終了してください。</p>
+        </div>
+      )}
+
+      <h3>得意な仕事</h3>
+      <p className="small">{e.description || '（設定画面で登録できます）'}</p>
+
+      <h3>取り組んでいる案件</h3>
       {e.currentJob ? (
         <div className="emp-job">
           <a href={`#/jobs/${e.currentJob.id}`}>
             #{e.currentJob.id} {e.currentJob.title}
-          </a>
+          </a>{' '}
+          {job && (job.adapter === 'demo' ? <DemoBadge /> : <Badge tone="real">Claude Code</Badge>)}
           {job && (
-            <div className="stage-progress">
+            <div className="stage-progress" aria-label="工程">
               {job.stages.map((s) => (
-                <span key={s.index} className={job.status === 'running' ? (s.index < job.currentStageIndex ? 'done' : s.index === job.currentStageIndex ? 'current' : '') : ''}>
-                  {s.label}
+                <span key={s.index} className={running ? (s.index < job.currentStageIndex ? 'done' : s.index === job.currentStageIndex ? 'current' : '') : ''}>
+                  {s.label}・{s.employeeName}
                 </span>
               ))}
             </div>
           )}
+          <div className="muted small">現在の工程: {e.currentJob.stage}</div>
         </div>
       ) : (
-        <p className="muted">いまは担当している仕事はありません。</p>
+        <p className="muted">いまは担当している案件はありません。</p>
       )}
       {e.queuedJobs.length > 0 && (
         <p className="small">
@@ -84,43 +118,73 @@ export function EmployeePanel({
         </p>
       )}
 
-      <h3>直近の成果</h3>
+      <h3>直近の成果物</h3>
       {e.recentDeliverables.length === 0 ? (
         <p className="muted">まだ保存された成果物はありません。</p>
       ) : (
         <ul className="plain">
-          {e.recentDeliverables.map((d) => (
+          {e.recentDeliverables.slice(0, 3).map((d) => (
             <li key={d.id}>
-              <a href={`#/library/${d.id}`}>{d.title}</a> {d.isDemo && <DemoBadge />} <span className="muted small">#{d.jobId}</span>
+              <button type="button" className="link-button" onClick={() => onOpenDeliverable(d.id)}>
+                {d.title}
+              </button>{' '}
+              {d.isDemo && <DemoBadge />} <span className="muted small">#{d.jobId}・{formatTime(d.createdAt)}</span>
             </li>
           ))}
         </ul>
       )}
 
-      <h3>相談事項</h3>
+      <h3>CEOへの確認事項</h3>
       {e.pendingApprovals.length === 0 ? (
-        <p className="muted">CEOへの相談はありません。</p>
+        <p className="muted">CEOへの確認事項はありません。</p>
       ) : (
-        <ul className="plain">
-          {e.pendingApprovals.map((a) => (
-            <li key={a.id}>
-              <a href="#/approvals">{a.title}</a> <span className="muted small">確認事項 {a.itemCount}件</span>
-            </li>
-          ))}
-        </ul>
+        e.pendingApprovals.map((a) => (
+          <div key={a.id} className="consult">
+            <div className="strong small">{a.title}</div>
+            {a.items.length === 0 ? (
+              <p className="muted small">確認事項の記載はありません（成果物の承認を待っています）。</p>
+            ) : (
+              <ul className="items small">
+                {a.items.slice(0, 4).map((it, i) => (
+                  <li key={i}>
+                    <Badge tone={it.severity === 'blocker' ? 'error' : it.severity === 'warning' ? 'review' : 'idle'}>{SEVERITY_LABEL[it.severity]}</Badge> {it.text}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ))
       )}
 
-      <div className="panel-foot">
+      {/* 実際に動く操作だけを置く */}
+      <div className="panel-actions">
         <button type="button" className="btn primary" onClick={() => navigate(`request?assignee=${e.id}`)}>
-          {e.name}に仕事を依頼
+          仕事を依頼する
         </button>
-        <a className="btn" href="#/settings">
-          名前・作業指示を編集
-        </a>
+        {e.currentJob && (
+          <button type="button" className="btn" onClick={() => navigate(`jobs/${e.currentJob!.id}`)}>
+            案件を見る
+          </button>
+        )}
+        {latest && (
+          <button type="button" className="btn" onClick={() => onOpenDeliverable(latest.id)}>
+            成果を見る
+          </button>
+        )}
+        {consult && (
+          <button type="button" className="btn attention" onClick={() => navigate(`approvals/${consult.id}`)}>
+            確認に答える
+          </button>
+        )}
       </div>
+      <a className="small" href="#/settings">
+        名前・作業指示を編集
+      </a>
     </PanelShell>
   );
 }
+
+const SEVERITY_LABEL: Record<string, string> = { info: '情報', warning: '要確認', blocker: '重大' };
 
 export function CeoPanel({ snapshot, onClose }: { snapshot: Snapshot; onClose: () => void }) {
   const pending = snapshot.approvals.filter((a) => a.status === 'pending');
@@ -139,8 +203,8 @@ export function CeoPanel({ snapshot, onClose }: { snapshot: Snapshot; onClose: (
                 依頼者 {nameOf(a.requestedBy)}・確認事項 {a.items.length}件・{formatTime(a.createdAt)}
               </div>
               <div className="row-actions">
-                <a className="btn small primary" href="#/approvals">
-                  承認画面で判断する
+                <a className="btn small primary" href={`#/approvals/${a.id}`}>
+                  確認に答える
                 </a>
                 <a className="btn small" href={`#/jobs/${a.jobId}`}>
                   案件を開く
@@ -197,41 +261,88 @@ export function ShelfPanel({
   );
 }
 
-export function AchievementsPanel({ snapshot, deliverables, onClose }: { snapshot: Snapshot; deliverables: DeliverableView[]; onClose: () => void }) {
+/** プロジェクトボード：実際の案件と成果物の一覧。データがなければ最初の依頼への導線を出す。 */
+export function ProjectBoardPanel({
+  snapshot,
+  deliverables,
+  navigate,
+  onOpenDeliverable,
+  onClose,
+}: {
+  snapshot: Snapshot;
+  deliverables: DeliverableView[];
+  navigate: (p: string) => void;
+  onOpenDeliverable: (id: number) => void;
+  onClose: () => void;
+}) {
+  const active = snapshot.jobs.filter((j) => j.status !== 'completed' && j.status !== 'cancelled');
   const done = snapshot.jobs.filter((j) => j.status === 'completed').sort((a, b) => (b.finishedAt ?? '').localeCompare(a.finishedAt ?? ''));
-  const approvedCount = snapshot.approvals.filter((a) => a.status === 'approved').length;
+  const latestOf = (jobId: number) => deliverables.find((d) => d.jobId === jobId && d.exists);
+  const card = (j: (typeof snapshot.jobs)[number]) => {
+    const st = JOB_STATUS[j.status];
+    const d = latestOf(j.id);
+    return (
+      <li key={j.id} className={j.status === 'awaiting_review' ? 'attention' : j.status === 'error' ? 'is-error' : ''}>
+        <div className="row-top">
+          <Badge tone={st.tone}>{st.label}</Badge> {j.adapter === 'demo' && <DemoBadge />}
+        </div>
+        <a href={`#/jobs/${j.id}`} className="strong">
+          #{j.id} {j.title}
+        </a>
+        <div className="muted small">
+          {j.status === 'completed' ? `完了 ${formatTime(j.finishedAt)}` : `更新 ${formatTime(j.updatedAt)}`}・成果物 {j.deliverableCount}件
+        </div>
+        {d && (
+          <div className="row-actions">
+            <button type="button" className="btn small" onClick={() => onOpenDeliverable(d.id)}>
+              成果を見る（{d.title}）
+            </button>
+          </div>
+        )}
+      </li>
+    );
+  };
   return (
-    <PanelShell title="実績ボード" onClose={onClose} testId="achievements-panel">
-      <p className="muted small">CEOが承認して完了した案件と、保存済みの成果物の記録です。</p>
+    <PanelShell title="プロジェクトボード" onClose={onClose} testId="projects-panel">
       <dl className="ach-stats">
         <div>
-          <dt>完了した案件</dt>
+          <dt>進行中</dt>
+          <dd>{active.length}</dd>
+        </div>
+        <div>
+          <dt>完了</dt>
           <dd>{done.length}</dd>
         </div>
         <div>
-          <dt>保存済み成果物</dt>
+          <dt>成果物</dt>
           <dd>{deliverables.length}</dd>
         </div>
-        <div>
-          <dt>承認の記録</dt>
-          <dd>{approvedCount}</dd>
-        </div>
       </dl>
-      {done.length === 0 ? (
-        <p className="muted">まだ完了した案件はありません。最初の承認で、ここに記録が並びます。</p>
+      {snapshot.jobs.length === 0 ? (
+        <div className="empty-start">
+          <p>まだプロジェクトはありません。</p>
+          <button type="button" className="btn primary" onClick={() => navigate('request')}>
+            最初のプロジェクトを始める
+          </button>
+        </div>
       ) : (
-        <ul className="decision-list">
-          {done.map((j) => (
-            <li key={j.id}>
-              <a href={`#/jobs/${j.id}`} className="strong">
-                #{j.id} {j.title}
-              </a>
-              <div className="muted small">
-                完了 {formatTime(j.finishedAt)}・成果物 {j.deliverableCount}件 {j.adapter === 'demo' ? '・デモ' : '・Claude Code'}
-              </div>
-            </li>
-          ))}
-        </ul>
+        <>
+          {active.length > 0 && (
+            <>
+              <h3>進行中</h3>
+              <ul className="decision-list">{active.map(card)}</ul>
+            </>
+          )}
+          {done.length > 0 && (
+            <>
+              <h3>完了</h3>
+              <ul className="decision-list">{done.slice(0, 8).map(card)}</ul>
+            </>
+          )}
+          <a className="btn" href="#/board">
+            案件ボードを開く
+          </a>
+        </>
       )}
     </PanelShell>
   );

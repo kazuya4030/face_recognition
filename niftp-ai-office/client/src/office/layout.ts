@@ -132,7 +132,8 @@ export const WALL = {
   brandWall: { from: 2.4, to: 8.6 },
   whiteboard: { from: 9.15, to: 10.75, z: 2.35, h: 1.25 },
   projectScreen: { from: 12.5, to: 14.8, z: 2.25, h: 1.05 },
-  achievements: { from: 10.2, to: 11.8, z: 2.6, h: 1.05 },
+  /** プロジェクトボード（コーヒーカウンターの上）。実際の案件を表示する。 */
+  projectBoard: { from: 9.9, to: 11.9, z: 2.8, h: 1.32 },
   // 左の壁、窓と資料棚の間
   clock: { at: 7.42, z: 2.6 },
 };

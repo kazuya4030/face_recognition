@@ -5,7 +5,7 @@
 export type HairStyle = 'short' | 'bob' | 'long' | 'bun' | 'curly' | 'side';
 export type Outfit = 'tee' | 'shirt' | 'hoodie' | 'knit' | 'overshirt';
 export type Accessory = 'glasses' | 'headphones' | 'earring' | 'watch' | 'none';
-export type DeskProp = 'mug' | 'plant' | 'books' | 'notes' | 'tablet' | 'headphones' | 'bottle';
+export type DeskProp = 'mug' | 'plant' | 'books' | 'notes' | 'tablet' | 'headphones' | 'bottle' | 'lamp' | 'notebook';
 
 export interface Appearance {
   skin: string;
@@ -30,7 +30,8 @@ const PRESETS: Record<string, Appearance> = {
     outfitColor: '#c9d0cf',
     inner: '#f2f0e7',
     accessory: 'glasses',
-    deskProps: ['notes', 'mug'],
+    // 進行管理：付箋・デスクライト・マグ
+    deskProps: ['notes', 'lamp', 'mug'],
   },
   researcher: {
     skin: '#f3d6bc',
@@ -40,7 +41,8 @@ const PRESETS: Record<string, Appearance> = {
     outfitColor: '#d8cfb8',
     inner: '#f2f0e7',
     accessory: 'earring',
-    deskProps: ['books', 'plant'],
+    // 調査：資料の本・植物・ブランドグリーンのノート
+    deskProps: ['books', 'plant', 'notebook'],
   },
   builder: {
     skin: '#ddb08b',
@@ -50,7 +52,8 @@ const PRESETS: Record<string, Appearance> = {
     outfitColor: '#3a3d36',
     inner: '#a4a89d',
     accessory: 'headphones',
-    deskProps: ['tablet', 'bottle'],
+    // 制作：タブレット・水筒・デスクライト
+    deskProps: ['tablet', 'bottle', 'lamp'],
   },
   qa: {
     skin: '#f5dcc6',
@@ -60,7 +63,8 @@ const PRESETS: Record<string, Appearance> = {
     outfitColor: '#8e9585',
     inner: '#f2f0e7',
     accessory: 'watch',
-    deskProps: ['notes', 'mug'],
+    // 品質確認：チェックリスト・ノート・マグ
+    deskProps: ['notes', 'notebook', 'mug'],
   },
 };
 
@@ -104,5 +108,5 @@ export const CEO_APPEARANCE: Appearance = {
   outfitColor: '#26281f',
   inner: '#f2f0e7',
   accessory: 'none',
-  deskProps: ['mug', 'notes'],
+  deskProps: ['mug', 'notebook', 'lamp'],
 };
