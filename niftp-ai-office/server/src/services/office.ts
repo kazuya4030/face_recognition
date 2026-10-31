@@ -298,7 +298,7 @@ export class OfficeService {
 
   // ---- 操作 ----
 
-  createJob(body: Record<string, unknown>): Job {
+  createJob(body: Record<string, unknown>, internal: { recurringTopicId?: number; actor?: 'ceo' | 'system' } = {}): Job {
     const employees = this.repo.listEmployees();
     const assigneeId = text(body.assigneeId, '担当社員', 64, true);
     if (!employees.some((e) => e.id === assigneeId)) throw new UserError('担当社員が存在しません');
@@ -324,8 +324,14 @@ export class OfficeService {
       researchWeb: body.researchWeb !== false,
       templateId,
       stageInstructions,
+      recurringTopicId: internal.recurringTopicId ?? null,
     });
-    this.ceoLog(job.id, `案件を登録（担当: ${employees.find((e) => e.id === assigneeId)?.name}、実行方式: ${this.adapters[adapter].label}）`);
+    const registered = `案件を登録（担当: ${employees.find((e) => e.id === assigneeId)?.name}、実行方式: ${this.adapters[adapter].label}）`;
+    if (internal.actor === 'system') {
+      this.repo.addActivity({ jobId: job.id, runId: null, employeeId: null, actor: 'system', kind: 'system', message: `定期研究として自動で${registered}`, detail: '' });
+    } else {
+      this.ceoLog(job.id, registered);
+    }
     if (body.startNow === true) this.applyAction(job.id, 'start', {});
     this.bus.changed(job.id);
     return this.repo.getJob(job.id)!;
@@ -482,6 +488,10 @@ export class OfficeService {
     if (body.defaultAdapter != null) {
       if (!(String(body.defaultAdapter) in this.adapters)) throw new UserError('実行方式が不正です');
       next.defaultAdapter = body.defaultAdapter as AdapterId;
+    }
+    if (body.recurringEnabled != null) {
+      if (typeof body.recurringEnabled !== 'boolean') throw new UserError('定期研究の有効・無効の指定が不正です');
+      next.recurringEnabled = body.recurringEnabled;
     }
     if (body.claudeModel != null) {
       const m = text(body.claudeModel, 'モデル', 64);

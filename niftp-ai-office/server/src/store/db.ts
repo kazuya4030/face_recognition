@@ -182,6 +182,13 @@ CREATE TABLE IF NOT EXISTS templates (
   updated_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS research_topics (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  text TEXT NOT NULL,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS company_profile (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   data TEXT NOT NULL,
@@ -214,6 +221,7 @@ const ADDED_COLUMNS: Record<string, [string, string][]> = {
     ['review_plan', 'INTEGER NOT NULL DEFAULT 0'],
     ['research_web', 'INTEGER NOT NULL DEFAULT 1'],
     ['template_id', 'TEXT'],
+    ['recurring_topic_id', 'INTEGER'],
   ],
   runs: [
     ['revision', 'INTEGER NOT NULL DEFAULT 0'],

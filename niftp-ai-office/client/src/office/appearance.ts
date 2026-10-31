@@ -66,6 +66,18 @@ const PRESETS: Record<string, Appearance> = {
     // 品質確認：チェックリスト・ノート・マグ
     deskProps: ['notes', 'notebook', 'mug'],
   },
+  scientist: {
+    skin: '#e6c09c',
+    hairStyle: 'long',
+    hairColor: '#3d332b',
+    // 白衣を思わせる明るいオーバーシャツ
+    outfit: 'overshirt',
+    outfitColor: '#e9e6da',
+    inner: '#5b5f56',
+    accessory: 'glasses',
+    // 研究：論文の本・ノート・デスクライト
+    deskProps: ['books', 'notebook', 'lamp'],
+  },
 };
 
 const HAIR: HairStyle[] = ['short', 'bob', 'long', 'bun', 'curly', 'side'];
@@ -82,7 +94,7 @@ function hash(s: string): number {
   return h;
 }
 
-/** 社員IDから見た目を決める。既定の4名以外は ID から決定的に組み合わせる。 */
+/** 社員IDから見た目を決める。既定の5名以外は ID から決定的に組み合わせる。 */
 export function appearanceOf(employeeId: string): Appearance {
   const preset = PRESETS[employeeId];
   if (preset) return preset;

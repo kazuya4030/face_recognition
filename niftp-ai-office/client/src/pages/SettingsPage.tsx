@@ -1,5 +1,6 @@
-import { useState } from 'react';
-import { api, type EmployeeView, type Snapshot } from '../api.ts';
+import { useEffect, useState } from 'react';
+import { api, type EmployeeView, type ResearchView, type Snapshot } from '../api.ts';
+import { JOB_STATUS } from '../labels.ts';
 import { Badge } from '../components.tsx';
 import { useReducedMotion } from '../office/state.ts';
 
@@ -142,7 +143,7 @@ const NUMBER_FIELDS = [
 ] as const;
 
 function ExecutionSettings({ snapshot }: { snapshot: Snapshot }) {
-  const [form, setForm] = useState<Record<string, string | number>>({ ...snapshot.settings });
+  const [form, setForm] = useState<Record<string, string | number | boolean>>({ ...snapshot.settings });
   const [msg, setMsg] = useState('');
   const save = async () => {
     try {
@@ -188,7 +189,7 @@ function ExecutionSettings({ snapshot }: { snapshot: Snapshot }) {
           {NUMBER_FIELDS.map((f) => (
             <label key={f.key}>
               {f.label}
-              <input type="number" step={f.step} value={form[f.key]} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />
+              <input type="number" step={f.step} value={String(form[f.key])} onChange={(e) => setForm({ ...form, [f.key]: e.target.value })} />
             </label>
           ))}
         </div>
@@ -251,6 +252,125 @@ function CompanyEditor({ snapshot }: { snapshot: Snapshot }) {
   );
 }
 
+/** 研究員（カイ）の定期研究。初期値は無効。間隔・1日の件数・確認待ちの上限を決めて有効にする。 */
+function ResearchSettings() {
+  const [data, setData] = useState<ResearchView | null>(null);
+  const [form, setForm] = useState({ recurringIntervalHours: 24, recurringMaxPerDay: 1, recurringMaxPending: 3 });
+  const [topic, setTopic] = useState('');
+  const [msg, setMsg] = useState('');
+  const load = () =>
+    api.research().then((d) => {
+      setData(d);
+      setForm({ recurringIntervalHours: d.settings.recurringIntervalHours, recurringMaxPerDay: d.settings.recurringMaxPerDay, recurringMaxPending: d.settings.recurringMaxPending });
+    });
+  useEffect(() => {
+    void load();
+  }, []);
+  if (!data) return null;
+  const act = async (fn: () => Promise<unknown>, done: string) => {
+    setMsg('');
+    try {
+      await fn();
+      setMsg(done);
+      await load();
+    } catch (e) {
+      setMsg((e as Error).message);
+    }
+  };
+  const enabled = data.settings.recurringEnabled;
+  return (
+    <section className="panel" id="research" data-testid="research-settings">
+      <h2>研究員の定期研究</h2>
+      <p className="muted small">
+        研究員カイが、登録したテーマを一定の間隔で1件ずつ研究し（作業計画→文献調査→研究ノート→レビュー）、成果を受信箱に届けます。実験・計算の実行はしません。
+        サーバーが動いている間だけ動きます（PC のスリープ中は進みません）。費用・回数の上限は通常の案件と同じです。
+      </p>
+      <p>
+        <Badge tone={enabled ? 'working' : 'cancelled'}>{enabled ? '有効' : '無効'}</Badge>{' '}
+        {enabled ? (data.waitingReason ? `待機中: ${data.waitingReason}` : '次の判定で開始します') : '有効にすると自動で始まります'}
+        {enabled && data.nextDueAt && <span className="muted small">（次の予定: {new Date(data.nextDueAt).toLocaleString('ja-JP')} 以降）</span>}
+      </p>
+      <div className="form">
+      <div className="grid-2">
+        <label>
+          間隔（時間）
+          <input type="number" min={1} max={168} value={form.recurringIntervalHours} onChange={(e) => setForm({ ...form, recurringIntervalHours: Number(e.target.value) })} />
+        </label>
+        <label>
+          1日に作る件数の上限
+          <input type="number" min={1} max={10} value={form.recurringMaxPerDay} onChange={(e) => setForm({ ...form, recurringMaxPerDay: Number(e.target.value) })} />
+        </label>
+        <label>
+          CEOの確認待ちがこの件数に達したら止める
+          <input type="number" min={1} max={10} value={form.recurringMaxPending} onChange={(e) => setForm({ ...form, recurringMaxPending: Number(e.target.value) })} />
+        </label>
+      </div>
+      </div>
+      <div className="form-actions">
+        <button
+          type="button"
+          className={`btn ${enabled ? '' : 'primary'}`}
+          onClick={() =>
+            act(
+              () => api.updateSettings({ ...form, recurringEnabled: !enabled }),
+              enabled ? '定期研究を無効にしました' : '定期研究を有効にしました（利用枠を使います）',
+            )
+          }
+        >
+          {enabled ? '定期研究を無効にする' : '保存して定期研究を有効にする'}
+        </button>
+        <button type="button" className="btn" onClick={() => act(() => api.updateSettings(form), '保存しました')}>
+          間隔・上限だけ保存
+        </button>
+        <button type="button" className="btn" disabled={!data.topics.some((t) => t.active)} onClick={() => act(() => api.researchRunNow(), '研究を1件開始しました（待ち行列に入りました）')}>
+          今すぐ1件研究させる
+        </button>
+        {msg && <span className="muted small">{msg}</span>}
+      </div>
+      <h3>研究テーマ（上から順に、まだ研究していないものを優先）</h3>
+      {data.topics.length === 0 ? (
+        <p className="muted small">テーマがありません。下で追加してください。</p>
+      ) : (
+        <ul className="plain">
+          {data.topics.map((t) => (
+            <li key={t.id} className="memory-row">
+              <label className="check inline">
+                <input type="checkbox" checked={t.active} onChange={(e) => act(() => api.updateTopic(t.id, { active: e.target.checked }), '更新しました')} />
+                {t.text}
+              </label>{' '}
+              <span className="muted small">テーマ#{t.id}・研究 {t.jobCount}回</span>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="form-actions">
+        <input value={topic} maxLength={300} onChange={(e) => setTopic(e.target.value)} placeholder="例: ペロブスカイト太陽電池の耐久性を高める方法" aria-label="研究テーマを追加" />
+        <button type="button" className="btn small" disabled={!topic.trim()} onClick={() => act(async () => { await api.addTopic(topic); setTopic(''); }, 'テーマを追加しました')}>
+          追加
+        </button>
+      </div>
+      <p className="muted small">兵器・危険な合成など安全上扱えないテーマは研究しません。医療・人や動物を対象とする内容は、専門家・倫理審査の確認が必要と明記されます。</p>
+      {data.recent.length > 0 && (
+        <>
+          <h3>最近の定期研究</h3>
+          <ul className="plain small">
+            {data.recent.map((j) => (
+              <li key={j.id}>
+                <a href={`#/jobs/${j.id}`}>
+                  #{j.id} {j.title}
+                </a>{' '}
+                <span className="muted">
+                  {JOB_STATUS[j.status as keyof typeof JOB_STATUS]?.label}・{new Date(j.createdAt).toLocaleString('ja-JP')}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
 function DisplaySettings() {
   const { pref, setPref } = useReducedMotion();
   return (
@@ -282,6 +402,7 @@ export function SettingsPage({ snapshot }: { snapshot: Snapshot }) {
       <h1>設定</h1>
       <CompanyEditor key={`${snapshot.company.name}-${snapshot.company.ceo}-${snapshot.company.status}`} snapshot={snapshot} />
       <ExecutionSettings snapshot={snapshot} />
+      <ResearchSettings />
       <DisplaySettings />
       <h2>AI社員</h2>
       <p className="muted">名前・役割・担当指示・提出形式・人間に戻す条件・参照できる情報・使えるツールを変更できます。変更は次の実行から反映されます。</p>

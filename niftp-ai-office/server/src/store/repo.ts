@@ -17,6 +17,7 @@ import {
   type MemoryKind,
   type MemoryRef,
   type Question,
+  type ResearchTopic,
   type SourceRecord,
   type Deliverable,
   type Employee,
@@ -96,6 +97,7 @@ function toJob(r: Row): Job {
     reviewPlan: Boolean(r.review_plan),
     researchWeb: r.research_web == null ? true : Boolean(r.research_web),
     templateId: nullableStr(r.template_id),
+    recurringTopicId: r.recurring_topic_id == null ? null : num(r.recurring_topic_id),
     currentStageIndex: num(r.current_stage_index),
     currentStepIndex: num(r.current_step_index),
     pauseRequested: Boolean(r.pause_requested),
@@ -303,11 +305,27 @@ export class Repo {
     if (count > 0) {
       this.renameUntouchedDefaults();
       this.applyUntouchedDuties();
+      this.addMissingSeedEmployees();
       return;
     }
     const t = now();
     const stmt = this.db.prepare(
       `INSERT INTO employees (id, sort_order, name, role_key, role_title, description, instructions, color, tools, output_format, escalation, refs, defaults_version, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const e of SEED_EMPLOYEES) {
+      stmt.run(
+        e.id, e.sortOrder, e.name, e.roleKey, e.roleTitle, e.description, e.instructions, e.color, JSON.stringify(e.tools),
+        e.outputFormat, e.escalation, JSON.stringify(e.refs), EMPLOYEE_DEFAULTS_VERSION, t, t,
+      );
+    }
+  }
+
+  /** 後から追加した初期社員（研究員など）が既存の DB にいなければ追加する。既存の社員は変えない。 */
+  private addMissingSeedEmployees(): void {
+    const t = now();
+    const stmt = this.db.prepare(
+      `INSERT OR IGNORE INTO employees (id, sort_order, name, role_key, role_title, description, instructions, color, tools, output_format, escalation, refs, defaults_version, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     );
     for (const e of SEED_EMPLOYEES) {
@@ -398,14 +416,14 @@ export class Repo {
       Job,
       'title' | 'purpose' | 'details' | 'acceptanceCriteria' | 'assigneeId' | 'usePlanner' | 'useResearch' | 'useReviewer' | 'adapter' | 'demoScenario'
     > &
-      Partial<Pick<Job, 'reviewPlan' | 'researchWeb' | 'templateId' | 'stageInstructions'>>,
+      Partial<Pick<Job, 'reviewPlan' | 'researchWeb' | 'templateId' | 'stageInstructions' | 'recurringTopicId'>>,
   ): Job {
     const t = now();
     const info = this.db
       .prepare(
         `INSERT INTO jobs (title, purpose, details, acceptance_criteria, assignee_id, use_planner, use_research, use_reviewer, adapter, demo_scenario,
-           review_plan, research_web, template_id, stage_instructions, status, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
+           review_plan, research_web, template_id, stage_instructions, recurring_topic_id, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
       )
       .run(
         input.title,
@@ -422,6 +440,7 @@ export class Repo {
         input.researchWeb === false ? 0 : 1,
         input.templateId ?? null,
         JSON.stringify(input.stageInstructions ?? {}),
+        input.recurringTopicId ?? null,
         t,
         t,
       );
@@ -706,6 +725,24 @@ export class Repo {
   memoryVersion(ref: MemoryRef): { kind: MemoryKind; text: string } | undefined {
     const r = this.db.prepare('SELECT kind, text FROM memory_versions WHERE item_id = ? AND version = ?').get(ref.id, ref.version) as Row | undefined;
     return r ? { kind: str(r.kind) as MemoryKind, text: str(r.text) } : undefined;
+  }
+
+  // ---- 定期研究のテーマ ----
+  listTopics(): ResearchTopic[] {
+    return (this.db.prepare('SELECT * FROM research_topics ORDER BY id').all() as Row[]).map((r) => ({
+      id: num(r.id), text: str(r.text), active: Boolean(r.active), createdAt: str(r.created_at),
+    }));
+  }
+
+  addTopic(text: string): ResearchTopic {
+    const info = this.db.prepare('INSERT INTO research_topics (text, active, created_at) VALUES (?, 1, ?)').run(text, now());
+    return this.listTopics().find((t) => t.id === Number(info.lastInsertRowid))!;
+  }
+
+  updateTopic(id: number, patch: { text?: string; active?: boolean }): void {
+    const cur = this.listTopics().find((t) => t.id === id);
+    if (!cur) return;
+    this.db.prepare('UPDATE research_topics SET text = ?, active = ? WHERE id = ?').run(patch.text ?? cur.text, (patch.active ?? cur.active) ? 1 : 0, id);
   }
 
   // ---- 業務テンプレート ----

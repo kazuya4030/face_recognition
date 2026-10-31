@@ -3,6 +3,7 @@ import type { OfficeService } from '../../server/src/services/office.ts';
 import type { OfficeEvent } from '../../server/src/services/officeEvents.ts';
 import type { OperationsService } from '../../server/src/services/operations.ts';
 import type { MaterialsService } from '../../server/src/services/materials.ts';
+import type { ResearchProgram } from '../../server/src/services/research.ts';
 import type { Attachment, JobTemplate, MemoryItem } from '../../server/src/domain/types.ts';
 
 export type { OfficeEvent };
@@ -14,6 +15,7 @@ export type ApprovalView = Snapshot['approvals'][number];
 export type JobDetail = ReturnType<OfficeService['jobDetail']>;
 export type DeliverableView = ReturnType<OfficeService['deliverablesWithExistence']>[number];
 export type DeliverableContent = ReturnType<OfficeService['deliverableContent']>;
+export type ResearchView = ReturnType<ResearchProgram['view']>;
 export type InboxItem = ReturnType<OperationsService['inbox']>[number];
 export type QueueView = ReturnType<OperationsService['queue']>;
 export type MemoryView = ReturnType<OperationsService['memory']>;
@@ -69,6 +71,11 @@ export const api = {
   addMemory: (kind: string, text: string) => request<MemoryItem>('POST', '/api/memory', { kind, text }),
   updateMemory: (id: number, body: Record<string, unknown>) => request<MemoryItem>('PUT', `/api/memory/${id}`, body),
   promoteNote: (id: number, kind: string, text: string) => request<MemoryItem>('POST', `/api/notes/${id}/promote`, { kind, text }),
+  // 定期研究
+  research: () => request<ResearchView>('GET', '/api/research'),
+  addTopic: (text: string) => request('POST', '/api/research/topics', { text }),
+  updateTopic: (id: number, body: Record<string, unknown>) => request<ResearchView>('PUT', `/api/research/topics/${id}`, body),
+  researchRunNow: () => request('POST', '/api/research/run-now', {}),
   // 業務状況・バックアップ
   summary: () => request<SummaryView>('GET', '/api/summary'),
   backups: () => request<BackupsView>('GET', '/api/backups'),

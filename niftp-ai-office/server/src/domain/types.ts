@@ -58,7 +58,7 @@ export interface Employee {
   id: string;
   sortOrder: number;
   name: string;
-  roleKey: 'manager' | 'researcher' | 'builder' | 'qa' | 'custom';
+  roleKey: 'manager' | 'researcher' | 'builder' | 'qa' | 'scientist' | 'custom';
   roleTitle: string;
   description: string;
   instructions: string;
@@ -111,6 +111,8 @@ export interface Job {
   /** 調査工程で Web 調査を必須にするか（資料レビューなどでは不要）。 */
   researchWeb: boolean;
   templateId: string | null;
+  /** 定期研究で自動作成した案件の場合、そのテーマの ID。 */
+  recurringTopicId: number | null;
   /** 次回「続きから開始」したときに始める工程（差し戻し後は成果物作成、失敗後は失敗した工程）。 */
   resumeStageKind: StageKind | null;
   currentStageIndex: number;
@@ -354,6 +356,22 @@ export interface Settings {
   maxMonthlyBudgetUsd: number;
   /** 1回の実行で工程に使う時間の合計上限（秒）。 */
   maxJobTimeSec: number;
+  /** 定期研究（研究員が登録テーマを一定間隔で研究する）を有効にするか。初期値は無効。 */
+  recurringEnabled: boolean;
+  /** 定期研究の間隔（時間）。 */
+  recurringIntervalHours: number;
+  /** 定期研究で 1 日に作る案件の上限。 */
+  recurringMaxPerDay: number;
+  /** CEO の確認待ちの定期研究がこの件数以上あれば、新しい定期研究を作らない（受信箱があふれないように）。 */
+  recurringMaxPending: number;
+}
+
+/** 定期研究のテーマ。 */
+export interface ResearchTopic {
+  id: number;
+  text: string;
+  active: boolean;
+  createdAt: string;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -371,10 +389,14 @@ export const DEFAULT_SETTINGS: Settings = {
   maxDailyBudgetUsd: 10,
   maxMonthlyBudgetUsd: 50,
   maxJobTimeSec: 3600,
+  recurringEnabled: false,
+  recurringIntervalHours: 24,
+  recurringMaxPerDay: 1,
+  recurringMaxPending: 3,
 };
 
 /** 設定値の許容範囲。範囲外の入力は拒否する（無限ループ・過剰実行の防止）。 */
-export const SETTINGS_LIMITS: Record<Exclude<keyof Settings, 'defaultAdapter' | 'claudeModel'>, [number, number]> = {
+export const SETTINGS_LIMITS: Record<Exclude<keyof Settings, 'defaultAdapter' | 'claudeModel' | 'recurringEnabled'>, [number, number]> = {
   maxTurns: [1, 100],
   maxBudgetUsd: [0.05, 20],
   timeoutSec: [30, 3600],
@@ -387,6 +409,9 @@ export const SETTINGS_LIMITS: Record<Exclude<keyof Settings, 'defaultAdapter' | 
   maxDailyBudgetUsd: [0.1, 200],
   maxMonthlyBudgetUsd: [0.1, 2000],
   maxJobTimeSec: [60, 14400],
+  recurringIntervalHours: [1, 168],
+  recurringMaxPerDay: [1, 10],
+  recurringMaxPending: [1, 10],
 };
 
 /** 会社情報。確定事項・仮説・未決定（未確認）を分けて保存し、入力されていない実績や顧客は補完しない。 */

@@ -15,6 +15,7 @@ niftp-ai-office/
     runner/     AI実行部分。adapter.ts（共通IF）/ demoAdapter.ts / claudeAdapter.ts / jobRunner.ts（実行キュー）
     services/   業務管理（office.ts）。CEOの操作・入力検証・画面向け集計
                 materials.ts 資料（添付・承認済み成果物の参照） / operations.ts 受信箱・待ち行列・会社の記憶・業務状況・バックアップ
+                research.ts 研究員の定期研究（1分ごとの判定、初期値は無効）
     ops/        バックアップ・復元（backup.ts）と運用コマンド（cli.ts: backup / verify / restore / doctor）
     api/        HTTP（Fastify）とローカル専用の防御（security.ts）
     app.ts      各層の組み立て / index.ts 起動
@@ -80,6 +81,8 @@ niftp-ai-office/
 27. **出典の確認方法はプログラムが照合する**（`reconcileSources`）。実際に WebFetch が成功した URL だけを「本文確認」とし、取得失敗は原因（実行環境／サイト側）を区分する。
 28. **バックアップは整合性を保つ**: DB は SQLite のバックアップ API で複製してからファイルを集め、manifest に SHA-256 を記録する。復元は空の場所へ行い、既存データは削除せず退避する。会社のデータ・バックアップはリポジトリ（公開）に含めない。
 
+29. **研究員（`scientist`）と定期研究**: 研究員にも Bash は渡さない（実験・計算は実行しない）。安全上扱えない内容（兵器・病原体の強化・危険な合成など）は扱わない指示を外さない。定期研究（`services/research.ts`）は初期値無効で、待ち行列の停止・前回の未完了・確認待ちの上限・1 日の上限・間隔を守る。自動作成した案件は CEO の操作ではなく system として記録する（`jobs.recurring_topic_id`）。初期社員を足すときは `seed.ts` に追加すれば、既存 DB にも起動時に追加される（`addMissingSeedEmployees`、既存社員は変えない）。
+
 ## 拡張の指針
 
 - 並列実行: `AppConfig.maxConcurrentRuns` を上げる。`JobRunner.kick()` は既に複数件を取り出せる形。同一作業ディレクトリへの同時書き込みが起きないこと（案件単位で分離済み）と、1日の上限判定の競合に注意。
@@ -87,4 +90,4 @@ niftp-ai-office/
 - 家具の追加・模様替え: `office/layout.ts` の `FURNITURE` に追加し、新しい種類なら `Furniture.tsx` に描画を足す。`target` を付けるとクリックで機能につながる。
 - 社員の見た目の変更: `office/appearance.ts` の `Appearance` を保存できるようにすれば、描画側は変更不要。
 - 工程の追加: `StageKind` と `STAGE_LABEL`、`stagesOf`、`stageIO`（入力・出力・必須出力）、`claudeAdapter.ts` の `STAGE_TASK` と `outputSchema`、デモの `STEPS`、偽CLI（`server/test/fixtures/fake-claude.mjs`）を合わせて更新する。
-- 社員の追加: 現状は初期4名の編集のみ（席は `EMPLOYEE_SEATS` に5名分、CEO は `CEO_SEAT`）。追加する場合は `employees` への INSERT と、役割（roleKey）による工程割り当て（`stagesOf`）の見直しが必要。
+- 社員の追加: 初期社員は 5 名（席は `EMPLOYEE_SEATS` に 5 名分で満席、CEO は `CEO_SEAT`）。6 人目以降は席の追加（`layout.ts`）と見た目（`appearance.ts`）、役割（roleKey）による工程割り当て（`stagesOf`）の見直しが必要。研究員のように「担当にしたときだけ成果物作成を行う」役割なら `stagesOf` の変更は不要。

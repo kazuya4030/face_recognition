@@ -7,6 +7,7 @@ import type { ExecutionAdapter } from '../runner/adapter.ts';
 import type { MaterialsService } from '../services/materials.ts';
 import { UserError, type OfficeService } from '../services/office.ts';
 import type { OperationsService } from '../services/operations.ts';
+import type { ResearchProgram } from '../services/research.ts';
 
 type IdParams = { id: string };
 
@@ -16,9 +17,9 @@ function parseId(raw: string): number {
   return id;
 }
 
-type Services = { office: OfficeService; materials: MaterialsService; ops: OperationsService };
+type Services = { office: OfficeService; materials: MaterialsService; ops: OperationsService; research: ResearchProgram };
 
-export function registerRoutes(app: FastifyInstance, { office, materials, ops }: Services, bus: ChangeBus, adapters: ExecutionAdapter[]): void {
+export function registerRoutes(app: FastifyInstance, { office, materials, ops, research }: Services, bus: ChangeBus, adapters: ExecutionAdapter[]): void {
   app.setErrorHandler((err, _req, reply: FastifyReply) => {
     if (err instanceof UserError) return reply.code(err.status).send({ error: err.message });
     const status = (err as { statusCode?: number }).statusCode;
@@ -100,6 +101,12 @@ export function registerRoutes(app: FastifyInstance, { office, materials, ops }:
   app.post<{ Body: Record<string, unknown> }>('/api/memory', async (req, reply) => reply.code(201).send(ops.addMemory(req.body ?? {})));
   app.put<{ Params: IdParams; Body: Record<string, unknown> }>('/api/memory/:id', async (req) => ops.updateMemory(parseId(req.params.id), req.body ?? {}));
   app.post<{ Params: IdParams; Body: Record<string, unknown> }>('/api/notes/:id/promote', async (req) => ops.promoteNote(parseId(req.params.id), req.body ?? {}));
+
+  // ---- 定期研究（研究員） ----
+  app.get('/api/research', async () => research.view());
+  app.post<{ Body: Record<string, unknown> }>('/api/research/topics', async (req, reply) => reply.code(201).send(research.addTopic(req.body ?? {})));
+  app.put<{ Params: IdParams; Body: Record<string, unknown> }>('/api/research/topics/:id', async (req) => research.updateTopic(parseId(req.params.id), req.body ?? {}));
+  app.post('/api/research/run-now', async () => research.runNow());
 
   // ---- 業務状況・利用状況・テンプレート ----
   app.get('/api/summary', async () => ops.summary());

@@ -102,6 +102,14 @@ CEO が自分の PC で「README の『CEO の PC で使う』」の手順を実
 - テスト: `server/test/operations.test.ts`（新規）、`fixtures/fake-claude.mjs`、`scripts/e2e.mjs`
 - 文書: `README.md`・`CLAUDE.md`・`PROGRESS.md`、`package.json`（運用コマンド、Node 22.16 以上）、`.gitignore`（backups）
 
+## 追加（2026-10-31）：研究員と定期研究
+
+- 5 人目の AI 社員「カイ（研究員AI）」を追加（`seed.ts`。既存 DB にも起動時に追加、既存 4 名は変更なし）。見た目は `appearance.ts` の `scientist`。
+- テンプレート「研究テーマ（科学・理系）」（`templates.ts`）。
+- 定期研究（`services/research.ts`、設定画面「研究員の定期研究」、`/api/research*`）。初期値は無効。
+- テスト: `server/test/research.test.ts`（3件）を追加し、`npm test` 58件・`npm run e2e` 22ステップすべて成功。
+- 実接続での研究案件・定期研究の実行は**未確認**（CEO が有効化・テーマ登録をしていないため。費用が発生するので CEO の判断待ち）。
+
 ## 阻害要因
 
 - CEO の PC に接続できない（Remote Control の接続フォルダがない）ため、PC での起動・ブラウザからのアクセスを確認できない。
